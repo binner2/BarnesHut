@@ -67,8 +67,14 @@ if(OpenMP_CXX_FOUND)
     target_link_libraries(generate_data PRIVATE OpenMP::OpenMP_CXX)
 endif()
 
+# Quadtree visualizer executable
+add_executable(visualize_quadtree visualize_quadtree.cpp quadtree_visualizer.cpp ${CORE_SOURCES})
+if(OpenMP_CXX_FOUND)
+    target_link_libraries(visualize_quadtree PRIVATE OpenMP::OpenMP_CXX)
+endif()
+
 # Installation
-install(TARGETS barnes_hut_sim generate_data
+install(TARGETS barnes_hut_sim generate_data visualize_quadtree
         RUNTIME DESTINATION bin)
 
 # Print configuration summary

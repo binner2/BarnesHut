@@ -16,19 +16,34 @@ enum class NodeType : std::uint8_t {
     Leaf = 2
 };
 
-// Modern Node structure with smart pointers and proper initialization
+/**
+ * @brief Cache-optimized tree node structure
+ *
+ * Layout optimized for cache performance:
+ * - Frequently accessed fields (type, mass, centers) are placed first
+ * - Hot path data fits within one cache line (64 bytes)
+ * - Cold data (children pointers) placed at end
+ */
 struct alignas(64) Node {  // Cache-line aligned for better performance
-    Index index = 0;
-    NodeType type = NodeType::Empty;
-    Vector3D geo_center{0.0};
-    Real size = 0.0;
-    Vector3D mass_center{0.0};
-    Real mass = 0.0;
-    std::vector<class Particle*> particle_list;  // For leaf nodes
-    Index particle_count = 0;
-    Index level = 0;
+    // ===== HOT DATA (frequently accessed during traversal) =====
+    // First cache line (64 bytes)
+    NodeType type = NodeType::Empty;        // 1 byte
+    // 7 bytes padding here to align mass_center
+    Vector3D mass_center{0.0};              // 24 bytes (aligned to 32 due to Vector3D alignment)
+    Real mass = 0.0;                        // 8 bytes
+    Real size = 0.0;                        // 8 bytes
+    Vector3D geo_center{0.0};               // 24 bytes (aligned to 32)
+    // Total hot data: ~72 bytes (spans into second cache line)
+
+    // ===== WARM DATA (moderately accessed) =====
+    Index particle_count = 0;               // 8 bytes
+    Index level = 0;                        // 8 bytes
+    Index index = 0;                        // 8 bytes
+    Node* parent = nullptr;                 // 8 bytes (non-owning pointer)
+
+    // ===== COLD DATA (less frequently accessed) =====
+    std::vector<class Particle*> particle_list;  // For leaf nodes only
     std::array<std::unique_ptr<Node>, NSUB> children;  // Smart pointers!
-    Node* parent = nullptr;  // Non-owning pointer
 
     // Rule of 5 - default move, delete copy
     Node() = default;

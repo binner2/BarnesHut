@@ -2,6 +2,7 @@
 
 #include "particle.h"
 #include "vektor.h"
+#include "object_pool.h"
 #include <vector>
 #include <memory>
 #include <string>
@@ -70,9 +71,13 @@ private:
     // Integration
     void integrate_particles();
 
-    // Node management
+    // Node management (using optimized object pool)
     [[nodiscard]] Node* allocate_node();
     void reset_node_pool() noexcept;
+
+    // Pool efficiency statistics
+    [[nodiscard]] double get_pool_efficiency() const noexcept;
+    [[nodiscard]] std::size_t get_pool_memory_usage() const noexcept;
 
     // Helper methods
     void display_node(const Node* node, std::ostream& os = std::cout) const;
@@ -84,8 +89,7 @@ private:
     Index max_particles_per_leaf_;
 
     std::unique_ptr<Node> root_;
-    std::vector<std::unique_ptr<Node>> node_pool_;
-    Index current_node_index_;
+    ObjectPool<Node> node_pool_;  // Optimized object pool
 
     Statistics stats_;
     Index max_tree_level_;

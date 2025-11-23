@@ -6,6 +6,16 @@
 
 namespace barnes_hut {
 
+// Helper function for random number generation
+namespace {
+    inline double generate_random(double min_val, double max_val) {
+        static std::random_device rd;
+        static std::mt19937 gen(rd());
+        std::uniform_real_distribution<double> dist(min_val, max_val);
+        return dist(gen);
+    }
+}  // anonymous namespace
+
 std::optional<SimulationConfig> read_config_file(std::string_view filename) {
     std::ifstream infile(filename.data());
     if (!infile) {

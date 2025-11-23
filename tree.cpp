@@ -17,16 +17,13 @@ BarnesHutTree::BarnesHutTree(std::span<Particle> particles, Real timestep, Real 
     , theta_(theta)
     , max_particles_per_leaf_(max_particles_per_leaf)
     , root_(std::make_unique<Node>())
-    , current_node_index_(0)
+    , node_pool_(particles_.size() * 3)  // Optimized object pool with estimated capacity
     , max_tree_level_(0) {
 
     // Initialize particle IDs
     for (Index i = 0; i < particles_.size(); ++i) {
         particles_[i].set_id(i);
     }
-
-    // Pre-allocate node pool (estimate: ~3x number of particles)
-    node_pool_.reserve(particles_.size() * 3);
 }
 
 void BarnesHutTree::simulation_step() {
@@ -56,8 +53,8 @@ void BarnesHutTree::simulation_step() {
     integrate_particles();
 
     stats_.time_total = total_timer.elapsed();
-    stats_.nodes_used = current_node_index_;
-    stats_.nodes_available = node_pool_.size();
+    stats_.nodes_used = node_pool_.allocated_count();
+    stats_.nodes_available = node_pool_.capacity();
 }
 
 void BarnesHutTree::clear_tree() {
@@ -75,9 +72,10 @@ void BarnesHutTree::find_bounding_box(Vector3D& center, Real& size) const {
     Vector3D min_pos = particles_[0].position();
     Vector3D max_pos = particles_[0].position();
 
-    // Find bounding box
-    for (const auto& particle : particles_) {
-        const auto& pos = particle.position();
+    // Find bounding box using modern ranges (C++20)
+    // More expressive and potentially better optimized by compiler
+    auto get_position = [](const Particle& p) -> const Vector3D& { return p.position(); };
+    for (const auto& pos : particles_ | std::views::transform(get_position)) {
         for (int dim = 0; dim < NDIM; ++dim) {
             min_pos[dim] = std::min(min_pos[dim], pos[dim]);
             max_pos[dim] = std::max(max_pos[dim], pos[dim]);
@@ -164,7 +162,7 @@ int BarnesHutTree::which_child(const Vector3D& position, const Node* node) const
     return (child_number >= 0 && child_number < NSUB) ? child_number : -1;
 }
 
-void BarnesHutTree::add_leaf(Index particle_idx, Particle& particle, Node* node, int child_idx) {
+void BarnesHutTree::add_leaf([[maybe_unused]] Index particle_idx, Particle& particle, Node* node, int child_idx) {
     node->type = NodeType::Internal;
 
     // Allocate new leaf from pool
@@ -205,7 +203,6 @@ void BarnesHutTree::convert_leaf_to_internal(Node* node, int child_idx) {
 
     // Re-insert particles
     for (auto* particle : temp_particle_list) {
-        const int new_child_idx = which_child(particle->position(), old_leaf);
         insert_particle(particle->id(), *particle, old_leaf);
     }
 }
@@ -283,44 +280,59 @@ void BarnesHutTree::compute_center_of_mass(Node* node) {
 }
 
 void BarnesHutTree::calculate_forces() {
-    // Reset forces
-    for (auto& particle : particles_) {
-        particle.force() = Vector3D{0.0};
-    }
+    // Reset forces using ranges (more expressive)
+    std::ranges::for_each(particles_, [](auto& p) {
+        p.force() = Vector3D{0.0};
+    });
 
     // Calculate forces for each particle
+    // Using ranges view to filter non-empty children
+    auto non_empty_children = root_->children
+        | std::views::filter([](const auto& child) {
+            return child && child->type != NodeType::Empty;
+        });
+
     for (auto& particle : particles_) {
-        for (const auto& child : root_->children) {
-            if (child && child->type != NodeType::Empty) {
-                interact(particle, child.get());
-            }
+        for (const auto& child : non_empty_children) {
+            interact(particle, child.get());
         }
     }
 }
 
 void BarnesHutTree::calculate_forces_parallel() {
-    // Reset forces
+    // Reset forces in parallel
     #pragma omp parallel for
     for (Index i = 0; i < particles_.size(); ++i) {
         particles_[i].force() = Vector3D{0.0};
     }
 
-    // Calculate forces in parallel
+    // Pre-filter non-empty children (done once, not per particle)
+    std::vector<Node*> active_children;
+    active_children.reserve(NSUB);
+    for (const auto& child : root_->children) {
+        if (child && child->type != NodeType::Empty) {
+            active_children.push_back(child.get());
+        }
+    }
+
+    // Calculate forces in parallel with dynamic scheduling for load balancing
     #pragma omp parallel for schedule(dynamic)
     for (Index i = 0; i < particles_.size(); ++i) {
-        for (const auto& child : root_->children) {
-            if (child && child->type != NodeType::Empty) {
-                interact(particles_[i], child.get());
-            }
+        for (const auto* child : active_children) {
+            interact(particles_[i], child);
         }
     }
 }
 
 bool BarnesHutTree::is_well_separated(const Particle& particle, const Node& node) const noexcept {
+    // Optimized: Avoid sqrt by comparing squared values
+    // Original: (size / r) <= theta
+    // Squared: size^2 <= theta^2 * (r^2 + epsilon^2)
     const Real r_squared = particle.position().squared_distance(node.mass_center);
-    const Real r = std::sqrt(r_squared + EPSILON_SQUARED);
+    const Real size_squared = node.size * node.size;
+    const Real theta_squared = theta_ * theta_;
 
-    return (node.size / r) <= theta_;
+    return size_squared <= theta_squared * (r_squared + EPSILON_SQUARED);
 }
 
 void BarnesHutTree::interact(Particle& particle, const Node* node) {
@@ -353,11 +365,18 @@ void BarnesHutTree::interact(Particle& particle, const Node* node) {
 void BarnesHutTree::particle_cell_interaction(Particle& particle, const Node& cell) {
     stats_.particle_cell_interactions++;
 
-    const Real r_squared = particle.position().squared_distance(cell.mass_center);
-    const Real r_cubed = (r_squared + EPSILON_SQUARED) * std::sqrt(r_squared + EPSILON_SQUARED);
     const Vector3D r_vec = particle.position() - cell.mass_center;
+    const Real r_squared = r_vec.squared_magnitude();
 
-    particle.force() += -GRAVITY * particle.mass() * cell.mass / r_cubed * r_vec;
+    // Optimized: Calculate r^(-3) using sqrt only once
+    // r^3 = (r^2 + epsilon^2)^(3/2) = (r^2 + epsilon^2) * sqrt(r^2 + epsilon^2)
+    const Real r_squared_softened = r_squared + EPSILON_SQUARED;
+    const Real inv_r = 1.0 / std::sqrt(r_squared_softened);
+    const Real inv_r_cubed = inv_r * inv_r * inv_r;
+
+    // Force = -G * m1 * m2 / r^3 * r_vec
+    const Real force_magnitude = GRAVITY * particle.mass() * cell.mass * inv_r_cubed;
+    particle.force() -= force_magnitude * r_vec;
 }
 
 void BarnesHutTree::direct_force_calculation(Particle& p1, Particle& p2) {
@@ -371,11 +390,14 @@ void BarnesHutTree::direct_force_calculation(Particle& p1, Particle& p2) {
     const Vector3D r_vec = p1.position() - p2.position();
     const Real r_squared = r_vec.squared_magnitude();
 
-    // Numerical stability with softening
-    const Real r_cubed = (r_squared + EPSILON_SQUARED) * std::sqrt(r_squared + EPSILON_SQUARED);
+    // Optimized: Calculate r^(-3) using sqrt only once
+    const Real r_squared_softened = r_squared + EPSILON_SQUARED;
+    const Real inv_r = 1.0 / std::sqrt(r_squared_softened);
+    const Real inv_r_cubed = inv_r * inv_r * inv_r;
 
-    const Vector3D force = -GRAVITY * p1.mass() * p2.mass() / r_cubed * r_vec;
-    p1.force() += force;
+    // Force = -G * m1 * m2 / r^3 * r_vec
+    const Real force_magnitude = GRAVITY * p1.mass() * p2.mass() * inv_r_cubed;
+    p1.force() -= force_magnitude * r_vec;
 }
 
 void BarnesHutTree::integrate_particles() {
@@ -388,23 +410,19 @@ void BarnesHutTree::integrate_particles() {
 }
 
 Node* BarnesHutTree::allocate_node() {
-    if (current_node_index_ < node_pool_.size()) {
-        auto* node = node_pool_[current_node_index_].get();
-        node->reset();
-        current_node_index_++;
-        return node;
-    }
-
-    // Allocate new node
-    auto new_node = std::make_unique<Node>();
-    auto* node_ptr = new_node.get();
-    node_pool_.push_back(std::move(new_node));
-    current_node_index_++;
-    return node_ptr;
+    return node_pool_.allocate();
 }
 
 void BarnesHutTree::reset_node_pool() noexcept {
-    current_node_index_ = 0;
+    node_pool_.reset();
+}
+
+double BarnesHutTree::get_pool_efficiency() const noexcept {
+    return node_pool_.efficiency();
+}
+
+std::size_t BarnesHutTree::get_pool_memory_usage() const noexcept {
+    return node_pool_.memory_usage();
 }
 
 std::string BarnesHutTree::get_statistics_string() const {

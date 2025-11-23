@@ -1,51 +1,11 @@
-// particle.cpp: implementation of the particle class.
-//
-//////////////////////////////////////////////////////////////////////
-
 #include "particle.h"
 
+// Implementation file for Particle class
+// Most implementations are inline in the header for performance
 
-//////////////////////////////////////////////////////////////////////
-// Construction/Destruction
-//////////////////////////////////////////////////////////////////////
+namespace barnes_hut {
 
-particle::particle()
-{
-	data = 1.0;
-	force = 0;
-	//pot = 0;
-	vel = 0;
-	pos = 0;
-	Id = 0;
-	parent = NULL;
+// Any non-inline implementations would go here
+// Currently, all methods are inline in the header
 
-}
-
-particle::particle( double dat , vektor p , vektor v )
-{
-	data = dat;
-	force = 0;
-	//pot = 0;
-	vel = v;
-	pos = p;
-	Id = -1;
-	parent = NULL;
-
-}
-
-
-int particle::calcVelPos ( double dt )
-{
-	// acc = force / m
-	vektor acc = force / data;
-
-	vel += acc * 0.5 * dt;
-	pos += vel * dt;
-	vel += acc * 0.5 * dt;
-	return 0;
-}
-
-/*particle::~particle()
-{
-}
-*/
+} // namespace barnes_hut

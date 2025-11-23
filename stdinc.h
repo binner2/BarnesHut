@@ -1,29 +1,55 @@
-/****************************************************************************
-* STDINC.H: standard include inspired from J. Barnes nbody code..
-* This file contains the standart includes
-* Burak ÝNNER , 5-7-2004                                                          
-****************************************************************************/
-
-#ifndef _stdinc_h
-#define _stdinc_h
+#pragma once
 
 #include <iostream>
-#include <fstream>                     //for file I/O
+#include <fstream>
 #include <cmath>
 #include <cstdlib>
-#include <ctime>
+#include <chrono>
 #include <iomanip>
+#include <string>
+#include <memory>
+#include <vector>
+#include <array>
+#include <optional>
+#include <string_view>
+#include <span>
+#include <concepts>
+#include <execution>
+#include <algorithm>
+#include <random>
 
-#define NDIM 3                  //Number of dimension for problem.
-#define NSUB 1<<NDIM            //number of child nodes.
+// Modern C++20 constants
+inline constexpr int NDIM = 3;
+inline constexpr int NSUB = 1 << NDIM;
+inline constexpr double GRAVITY = 1.0;
+inline constexpr double EPSILON_SQUARED = 1e-10;  // Softening parameter for numerical stability
 
-//#define gravity 6.672e-1
-#define gravity 1               //gravity or coulomb constant.
+// Modern configuration flags
+inline constexpr bool ENABLE_TIMING = true;
+inline constexpr bool ENABLE_DEBUG = true;
 
-#define showtime 1
+namespace barnes_hut {
 
-#define xdebug 1
+// Modern type aliases
+using Real = double;
+using Index = std::size_t;
+using TimePoint = std::chrono::high_resolution_clock::time_point;
+using Duration = std::chrono::duration<double>;
 
-using namespace std;
+// High-precision timer class
+class Timer {
+public:
+    Timer() : start_(std::chrono::high_resolution_clock::now()) {}
 
-#endif
+    void reset() { start_ = std::chrono::high_resolution_clock::now(); }
+
+    [[nodiscard]] double elapsed() const {
+        auto end = std::chrono::high_resolution_clock::now();
+        return std::chrono::duration<double>(end - start_).count();
+    }
+
+private:
+    TimePoint start_;
+};
+
+} // namespace barnes_hut

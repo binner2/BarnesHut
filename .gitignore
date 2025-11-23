@@ -506,3 +506,11 @@ FodyWeavers.xsd
 # Additional files built by Visual Studio
 
 # End of https://www.toptal.com/developers/gitignore/api/c,c++,cmake,xmake,visualstudio,visualstudiocode
+
+# Project-specific executables
+barnes_hut_sim
+generate_data
+
+# Output data files
+snap*
+*.dat

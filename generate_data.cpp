@@ -1,71 +1,62 @@
-// generate_data.cpp : generate random datas
-//
+/**
+ * Modern Data Generator for Barnes-Hut Simulation
+ * Generates random particle data for testing
+ */
 
+#include "file.h"
 #include <iostream>
-#include <fstream>
+#include <string>
 
-using namespace std;
+using namespace barnes_hut;
 
-const int NDIM = 3 ;
-int main(int argc, char* argv[])
-{
-	cout<<"this program generates random datas for a file like this :";
-	cout<<endl<<endl;
-	cout<<"n	//number of particles"<<endl;
-	cout<<"t	//start of simulation time "<<endl;
-	cout<<"t_end	//end of simulation time"<<endl;
-	cout<<"dt	//time step of simulation"<<endl;
-	//cout<<"dt_out	//output time step of simultaion "<<endl;	
-	cout<<"mass[1]	x[1]	y[1]	z[1]	vx[1]	vy[1]	vz[1]"<<endl;
-	cout<<"mass , x,y,z coordinates and x,y,z velocities of particles.."<<endl;
-	cout<<"....."<<endl;
-	cout<<endl;
-
-	char filename[25]=" ";
-	cout<<"enter filename = " ; cin.get ( filename , 25 );
-	
-	ofstream outfile( filename );
-
-	int n;
-	cout<<"enter number of particle (n) = ";	cin >> n;
-	outfile << n <<endl;
-
-	float t;
-	cout<<"simulation start time (t) = ";	cin >> t;
-	outfile << t <<endl;
-
-	float t_end;
-	cout<<"simulation end time (t_end) = ";	cin >> t_end;
-	outfile << t_end <<endl;
-
-	float dt;
-	cout<<"time step of simulation (dt) = ";	cin >> dt;
-	outfile << dt <<endl;
-
-	cout<<endl<<"now generating the random mass , coordinates and velocities..."<<endl;
-
-	/*	generates data 	*/
-
-	for ( int i=0; i<n; i++ )	{
-		
-		outfile << rand()% 10000 + 5000;	// mass between 5000 - randmax 
-
-		for( int k=0; k < NDIM ; k++ )	{
-			outfile << ' ' << 10 * (float)rand() / RAND_MAX;
-		}
-
-		for( k=0; k < NDIM ; k++ )	{
-			outfile << ' ' << (float) ( rand() % 100) ;
-		}
-
-		outfile << endl;
-	}
-	
-	cout<<endl<<endl<< "all datas generated .... ";
-
-	outfile.close();
-	return 0;
+void print_usage(const char* program_name) {
+    std::cout << "Usage: " << program_name << " <filename> <num_particles> <t_start> <t_end> <dt>\n"
+              << "  filename: Output file name\n"
+              << "  num_particles: Number of particles to generate\n"
+              << "  t_start: Simulation start time\n"
+              << "  t_end: Simulation end time\n"
+              << "  dt: Time step\n"
+              << "\nExample:\n"
+              << "  " << program_name << " test.dat 1000 0.0 1.0 0.01\n";
 }
 
+int main(int argc, char* argv[]) {
+    std::cout << "=== Modern Barnes-Hut Data Generator ===\n\n";
 
+    if (argc != 6) {
+        print_usage(argv[0]);
+        return 1;
+    }
 
+    const std::string filename = argv[1];
+    const Index num_particles = std::stoull(argv[2]);
+    const Real t_start = std::stod(argv[3]);
+    const Real t_end = std::stod(argv[4]);
+    const Real dt = std::stod(argv[5]);
+
+    SimulationConfig config;
+    config.particle_count = num_particles;
+    config.start_time = t_start;
+    config.end_time = t_end;
+    config.time_step = dt;
+
+    if (!config.is_valid()) {
+        std::cerr << "Error: Invalid configuration parameters\n";
+        std::cerr << "  Ensure: N > 0, t_end > t_start, dt > 0\n";
+        return 2;
+    }
+
+    std::cout << "Generating data:\n"
+              << "  Output file: " << filename << "\n"
+              << "  Particles: " << num_particles << "\n"
+              << "  Time range: " << t_start << " -> " << t_end << "\n"
+              << "  Time step: " << dt << "\n\n";
+
+    if (!generate_test_data(filename, config)) {
+        std::cerr << "Error: Failed to generate data\n";
+        return 3;
+    }
+
+    std::cout << "\nData generation successful!\n";
+    return 0;
+}

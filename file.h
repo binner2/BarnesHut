@@ -1,60 +1,60 @@
-/*		23 Aðustos 2004						
-		version 2							
-		|-----> putsnapshot with a message that contains information
-				and the values are in scientific format not in fixed format..
-		29 nisan 2004						
-		version 1.1							
-		|-----> readfilepart() with particle class 
-		version 1	
-		|-----> file.cpp and file.h		
-*/
+#pragma once
 
-#ifndef _file_h
-#define _file_h
-
-extern int particleLEAF;
-extern double TETA;
-
-#include "vektor.h"							//for vector 
 #include "particle.h"
+#include "vektor.h"
+#include <string>
+#include <string_view>
+#include <filesystem>
+#include <optional>
+#include <span>
 
+namespace barnes_hut {
 
-/********************************************************************************************
-**	 GENERATE and write datas to a file like this :
-**   n   //number of particles"<<endl;
-**   t   //start of simulation time "<<endl;
-**   t_end   //end of simulation time"<<endl;
-**   dt   //time step of simulation"<<endl;
-**   //dt_out   //output time step of simultaion "<<endl;   
-**   mass[1]   x[1]   y[1]   z[1]   vx[1]   vy[1]   vz[1]"<<endl;
-**   mass , x,y,z coordinates and x,y,z velocities of particles.."<<endl;
-********************************************************************************************/
-int generatedata( char* filename );
+// Modern file I/O with exception safety and RAII
+struct SimulationConfig {
+    Index particle_count = 0;
+    Real start_time = 0.0;
+    Real end_time = 1.0;
+    Real time_step = 0.01;
+    Real theta = 0.5;
+    Index particles_per_leaf = 1;
 
-/********************************************************************************************
-*    this function reads datas from a file with particle class          ************
-**   n   //number of particles"<<endl;
-**   t   //start of simulation time "<<endl;
-**   t_end   //end of simulation time"<<endl;
-**   dt   //time step of simulation"<<endl;
-**   //dt_out   //output time step of simultaion "<<endl;   
-**   mass[1]   x[1]   y[1]   z[1]   vx[1]   vy[1]   vz[1]"<<endl;
-**   mass , x,y,z coordinates and x,y,z velocities of particles.."<<endl;
-********************************************************************************************/
-int readfilePart( char* filename , long *n , particlePtr *partList , double* starttime , double* endtime , double* stepsize);
+    [[nodiscard]] bool is_valid() const noexcept {
+        return particle_count > 0 &&
+               end_time > start_time &&
+               time_step > 0.0 &&
+               theta > 0.0 &&
+               particles_per_leaf > 0;
+    }
+};
 
-/********************************************************************************************
-**				put Position of the system to a file..
-**   x[1]   y[1]   z[1]   
-**   x,y,z coordinates of particles.. so we can plot with gnuplot
-********************************************************************************************/
-int putsnapshotfilePos( long n , particle* particlePointerList , const char* ,double tetaparam  );
+// Modern file reading with std::optional for error handling
+[[nodiscard]] std::optional<SimulationConfig>
+read_config_file(std::string_view filename);
 
-/********************************************************************************************
-**				put FORCES of the system to a filename.
-**   x[1]   y[1]   z[1]   
-**   x,y,z coordinates of particles.. so we can plot with gnuplot
-********************************************************************************************/
-int putsnapshotfileForce( long n , particle* particlePointerList , const char* );
+// Read particle data from file
+[[nodiscard]] std::optional<std::vector<Particle>>
+read_particle_file(std::string_view filename, const SimulationConfig& config);
 
-#endif
+// Write particle positions to file
+bool write_particle_positions(
+    std::span<const Particle> particles,
+    std::string_view message,
+    Real theta,
+    Index particles_per_leaf,
+    std::string_view base_filename = "snapPOS"
+);
+
+// Write particle forces to file
+bool write_particle_forces(
+    std::span<const Particle> particles,
+    std::string_view message,
+    Real theta,
+    Index particles_per_leaf,
+    std::string_view base_filename = "snapFORCE"
+);
+
+// Generate random test data
+bool generate_test_data(std::string_view filename, const SimulationConfig& config);
+
+} // namespace barnes_hut

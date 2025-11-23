@@ -1,177 +1,142 @@
-/*-------------------------------------------------------------------------
--- treetest.cpp - Fast Multipole Method N-body implementation for coulomb forces..
--- Burak ÝNNER , 6-7-2004
-	01-03-2005
-		teta and particleLEAF global variable.
-		LEAF has a STL::vector for particle pointers.
-		Nodelist is a STL::vector for NODE pointers.
-	07-02-2005
-		review..
-	26-8-2004
-	-->TETA parameter NOT defined as static double in stdinc.h 
-	instead of static, tetaparameter send as a function argument and
-	defined in TREE
----------------------------------------------------------------------------*/
+/**
+ * Modern Barnes-Hut N-Body Simulation
+ * Modernized from 2004 legacy code to C++20
+ *
+ * Features:
+ * - Modern C++20 features (concepts, ranges, span, etc.)
+ * - Smart pointers for memory safety
+ * - CPU parallelization with OpenMP
+ * - RAII and exception safety
+ * - std::optional for error handling
+ */
 
 #include "file.h"
 #include "tree.h"
+#include <iostream>
+#include <string>
+#include <vector>
+#include <memory>
 
-double TETA;
-int particleLEAF;
+using namespace barnes_hut;
 
-int main( int argc, char *argv[] )
-{
-	int i=0;
+void print_usage(const char* program_name) {
+    std::cout << "Usage: " << program_name << " <filename> <theta> <particles_per_leaf>\n"
+              << "  filename: Input file with particle data\n"
+              << "  theta: Barnes-Hut opening angle (e.g., 0.5)\n"
+              << "  particles_per_leaf: Max particles in leaf node (e.g., 10)\n"
+              << "\nExample:\n"
+              << "  " << program_name << " data.dat 0.5 10\n";
+}
 
-	long N = 0;				//number of particle...
-	particlePtr partList = NULL;		//particle array..
-	double starttime=0.0;
-	double endtime=0.0;
-	double stepsize=0.0;
-	clock_t start,end;
-	char message[300]=" ";
-	//char timetakes1[200]=" ";
-	double timeLoad , timeUpward , timeForce;
+int main(int argc, char* argv[]) {
+    if (argc != 4) {
+        print_usage(argv[0]);
+        return 1;
+    }
 
-/****************** read from filename mass velocities position ************************/
-	char filename[25] = "filenamedata1.dat";
-	if ( argc == 4 ) {
-		strcpy( filename , argv[1] );
-		cout<<"reading particle information from file " <<filename<<endl;
-		TETA = atof(argv[2]);
-		particleLEAF = atoi( argv[3] );
+    const std::string filename = argv[1];
+    const Real theta = std::stod(argv[2]);
+    const Index particles_per_leaf = std::stoull(argv[3]);
 
-		//generatedata2( filename );
-		readfilePart( filename , &N , &partList , &starttime , &endtime , &stepsize);
+    std::cout << "=== Modern Barnes-Hut N-Body Simulation ===\n\n";
 
-	}
-	else
-	{
-		cout<<"\nparameter problem..\nbh N TETA pLEAF\nN is the number of particles, pLEAF is number of particles in LEAF\n";
-		exit(2);
-	}
+    // Read configuration
+    auto config_opt = read_config_file(filename);
+    if (!config_opt) {
+        std::cerr << "Error: Failed to read configuration from " << filename << "\n";
+        return 2;
+    }
 
-/************* time ****************************************************************************/
-#ifdef showtime    		
-	start = clock();
-#endif    
-/*****************************************************************************************/
+    auto config = *config_opt;
+    config.theta = theta;
+    config.particles_per_leaf = particles_per_leaf;
 
-	cout <<"Starting a BARNES HUT algorithm with Lepfrog integration for a \n" << N
-     << "-body system,from time t =" << starttime <<" to t=" << endtime <<" with time step = " << stepsize
-	 << " \nand number of max. particle in a LEAF " << particleLEAF << " TETA="<< TETA << endl;
+    // Read particle data
+    auto particles_opt = read_particle_file(filename, config);
+    if (!particles_opt) {
+        std::cerr << "Error: Failed to read particle data from " << filename << "\n";
+        return 3;
+    }
 
-/************* time ****************************************************************************/
-#ifdef showtime    		
-	end = clock();
-	cout<<"read from file elapsed "<< (end-start) /(float)CLOCKS_PER_SEC<<" seconds.."<< endl;
-#endif    
-/*****************************************************************************************/
+    auto particles = std::move(*particles_opt);
 
-	clock_t onestep_time_start;				//one step time of the simulation time..
+    std::cout << "Starting Barnes-Hut simulation for " << particles.size() << " particles\n"
+              << "  Time: " << config.start_time << " -> " << config.end_time
+              << " (dt=" << config.time_step << ")\n"
+              << "  Theta: " << theta << "\n"
+              << "  Max particles per leaf: " << particles_per_leaf << "\n";
 
-	/* construct tree with the simulation parameter */
-	tree bhtree( partList , stepsize , N );
-	
-/****************************************************************************************/
+#ifdef _OPENMP
+    #pragma omp parallel
+    {
+        #pragma omp single
+        std::cout << "  OpenMP enabled with " << omp_get_num_threads() << " threads\n";
+    }
+#else
+    std::cout << "  OpenMP not enabled (serial execution)\n";
+#endif
 
-	int counter=0;			//number of total step.
+    std::cout << "\n";
 
-	double dt_out= (endtime - starttime) / 10;	//snapshot output frequency.
-	double t_out = starttime + dt_out;			//put snapshot on t_out
-	
-	while ( endtime > starttime  )
-	{
-		onestep_time_start = clock();
+    // Create Barnes-Hut tree
+    BarnesHutTree tree(particles, config.time_step, theta, particles_per_leaf);
 
-		strcpy( message , " " );
-		
-/************* time ****************************************************************************/
-#ifdef showtime    		
-		start = clock();
-#endif    
-/*****************************************************************************************/
+    // Simulation loop
+    Index step = 0;
+    Real current_time = config.start_time;
 
-		bhtree.loadparticles( );
+    const Real output_interval = (config.end_time - config.start_time) / 10.0;
+    Real next_output_time = config.start_time + output_interval;
 
-/************* time ****************************************************************************/
-#ifdef showtime    		
-		end = clock();
-		timeLoad = (end-start)/(float)CLOCKS_PER_SEC;
-		cout<<"\nload particles takes "<< timeLoad <<" seconds"<< endl;
-		start = clock();
-#endif    
-/*****************************************************************************************/
+    Timer simulation_timer;
 
-		bhtree.upwardpass();	//	upward pass .. calculate center of mass for the cubes..
+    while (current_time < config.end_time) {
+        // Perform one simulation step
+        tree.simulation_step();
 
-/************* time ****************************************************************************/
-#ifdef showtime    		
-		end = clock();
-		timeUpward = (end-start)/(float)CLOCKS_PER_SEC;
-		cout<<"\nupward pass ( without load particles) takes "<< timeUpward <<" seconds"<< endl;
-		start = clock();
-#endif    
-/*****************************************************************************************/
+        current_time += config.time_step;
+        step++;
 
-		//bhtree.downwardpass();		// downward pass ... 
+        // Print statistics
+        const auto& stats = tree.get_statistics();
 
-/************* time ****************************************************************************/
-#ifdef showtime    		
-		end = clock();
-		//cout<<"\ndownward pass ( without load particles with upwardpass) takes "<< ( end-start) / (float)CLOCKS_PER_SEC<<" seconds"<< endl;
-		start = clock();
-#endif    
-/*****************************************************************************************/
+        if constexpr (ENABLE_TIMING) {
+            std::cout << "Step " << std::setw(4) << step
+                      << " | Time: " << std::fixed << std::setprecision(3) << current_time
+                      << " | Load: " << std::setprecision(4) << stats.time_load << "s"
+                      << " | Upward: " << stats.time_upward << "s"
+                      << " | Force: " << stats.time_force << "s"
+                      << " | Total: " << stats.time_total << "s"
+                      << " | Direct: " << stats.direct_force_count
+                      << " | P-C: " << stats.particle_cell_interactions
+                      << "\n";
+        }
 
-		bhtree.calculateforces();		//	calculate forces with the tree..
+        // Write snapshot if needed
+        if (current_time >= next_output_time) {
+            std::ostringstream message;
+            message << tree.get_statistics_string();
 
-/************* time ****************************************************************************/
-#ifdef showtime    		
-		end = clock();
-		timeForce = ( end-start) / (float)CLOCKS_PER_SEC;
-		cout<<"\ncalculate forces take ( without load particles.."<< timeForce <<" seconds.."<< endl;
-#endif    
-/*****************************************************************************************/
-		
-		bhtree.emptytree( message );
+            write_particle_forces(
+                particles,
+                message.str(),
+                theta,
+                particles_per_leaf
+            );
 
-		starttime += stepsize;
+            next_output_time += output_interval;
+        }
 
-		counter++;
+        // Clear tree for next iteration
+        tree.clear_tree();
+    }
 
-/************* time ****************************************************************************/
-#ifdef showtime    		
-	clock_t onestep_time_end=clock();
-	cout<<"\nall takes "<< ( onestep_time_end-onestep_time_start) / (float)CLOCKS_PER_SEC<<" seconds"<< endl;
-	char timetakes[300]=" ";
-	sprintf(timetakes,"BH;pLEAF;%d;step;%d;teta;%1.2f;timeSort;-;timeLoad;%f;timeupward;%f;timeDownward;;timeforce;%f;all;%f;",particleLEAF, counter , TETA, timeLoad , timeUpward, timeForce , ( onestep_time_end-onestep_time_start) / (float)CLOCKS_PER_SEC );
-	strcat( timetakes , message );
-	cout<<"number of step = "<<counter;
-#endif    
-/*****************************************************************************************/
+    const double total_simulation_time = simulation_timer.elapsed();
 
-		///////////////////////////////////////////////////////////////////////////////
-		// now it write file the forces array..
-		putsnapshotfileForce( N , partList , timetakes  );
+    std::cout << "\n=== Simulation Complete ===\n"
+              << "Total steps: " << step << "\n"
+              << "Total time: " << total_simulation_time << " seconds\n"
+              << "Average time per step: " << (total_simulation_time / step) << " seconds\n";
 
-	}
-
-/************* time ****************************************************************************
-#ifdef showtime    		
-	clock_t onestep_time_end=clock();
-	cout<<"\nall takes "<< ( onestep_time_end-allstart) / (float)CLOCKS_PER_SEC<<" seconds"<< endl;
-	char timetakes[300]=" ";
-	sprintf(timetakes,"BH;teta;%f;pLEAF;%d;all;%f;",TETA, particleLEAF,  ( onestep_time_end-allstart) / (float)CLOCKS_PER_SEC );
-
-	cout<<"number of step = "<<counter;
-#endif    
-********************************************************************************************/
-
-	///////////////////////////////////////////////////////////////////////////////
-	// now it write file the forces array..
-	//putsnapshotfileForce( N , partList , timetakes  );
-		
-	//cout<<endl<<"end of the BARNES-HUT"<<endl;
-	return 0;
+    return 0;
 }

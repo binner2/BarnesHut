@@ -1,99 +1,141 @@
-// particle.h: interface for the particle class.
-//
-//////////////////////////////////////////////////////////////////////
+#pragma once
 
+#include "vektor.h"
+#include <memory>
+#include <cstdint>
 
-#ifndef _particle_h
-#define _particle_h
+namespace barnes_hut {
 
-#include <vector>      //STL vector.
-#include "vektor.h"      //3d vector.
+// Forward declaration
+class TreeNode;
 
-class particle;
-
-enum _type { EMPTY=0 , NODE=1 , LEAF=2 };
-
-struct Node
-{
-	long index;						//index of the NODE array.
-
-	_type Type;						//type of this NODE or LEAF
-
-	vektor geocenter;				//geometric center coordinate of the node
-
-	double rsize;					//length of the cubes one side.
-
-	vektor masscenter;
-
-	double mass;
-
-    vector<particle*> plist;		// list of particles in cell IF LEAF
-
-	int Nparticle;			//number of particle in this node..
-
-	long level;			//level of the tree
-	
-	Node* child[NSUB];				//link to children
-
-	Node* parent;
-
+// Modern enum class (type-safe)
+enum class NodeType : std::uint8_t {
+    Empty = 0,
+    Internal = 1,
+    Leaf = 2
 };
 
-// Reset The Node all variables to default value.  Type = EMPTY 
+// Modern Node structure with smart pointers and proper initialization
+struct alignas(64) Node {  // Cache-line aligned for better performance
+    Index index = 0;
+    NodeType type = NodeType::Empty;
+    Vector3D geo_center{0.0};
+    Real size = 0.0;
+    Vector3D mass_center{0.0};
+    Real mass = 0.0;
+    std::vector<class Particle*> particle_list;  // For leaf nodes
+    Index particle_count = 0;
+    Index level = 0;
+    std::array<std::unique_ptr<Node>, NSUB> children;  // Smart pointers!
+    Node* parent = nullptr;  // Non-owning pointer
 
+    // Rule of 5 - default move, delete copy
+    Node() = default;
+    ~Node() = default;
+    Node(const Node&) = delete;
+    Node& operator=(const Node&) = delete;
+    Node(Node&&) noexcept = default;
+    Node& operator=(Node&&) noexcept = default;
 
-class particle  
-{
-private:
-	double data;		//mass or q
-	vektor pos;
-	vektor vel;
-	//double pot;
-	vektor force;
-	unsigned int Id;
-	Node *parent;
+    void reset() noexcept {
+        index = 0;
+        type = NodeType::Empty;
+        geo_center = Vector3D{0.0};
+        size = 0.0;
+        mass_center = Vector3D{0.0};
+        mass = 0.0;
+        particle_list.clear();
+        particle_count = 0;
+        level = 0;
+        for (auto& child : children) {
+            child.reset();
+        }
+        parent = nullptr;
+    }
+};
 
+// Modern Particle class with move semantics and const correctness
+class Particle {
 public:
+    // Constructors
+    Particle() noexcept
+        : mass_(1.0)
+        , position_(0.0)
+        , velocity_(0.0)
+        , force_(0.0)
+        , id_(0)
+        , parent_(nullptr) {}
 
-	friend class tree;
+    Particle(Real mass, Vector3D pos, Vector3D vel) noexcept
+        : mass_(mass)
+        , position_(pos)
+        , velocity_(vel)
+        , force_(0.0)
+        , id_(0)
+        , parent_(nullptr) {}
 
-	particle();
-	particle( double data , vektor p , vektor v );
+    // Rule of 5 - explicit defaults
+    ~Particle() = default;
+    Particle(const Particle&) = default;
+    Particle& operator=(const Particle&) = default;
+    Particle(Particle&&) noexcept = default;
+    Particle& operator=(Particle&&) noexcept = default;
 
-	//virtual ~particle();
+    // Const-correct getters (return const ref for efficiency)
+    [[nodiscard]] Real mass() const noexcept { return mass_; }
+    [[nodiscard]] const Vector3D& position() const noexcept { return position_; }
+    [[nodiscard]] const Vector3D& velocity() const noexcept { return velocity_; }
+    [[nodiscard]] const Vector3D& force() const noexcept { return force_; }
+    [[nodiscard]] Index id() const noexcept { return id_; }
+    [[nodiscard]] const Node* parent() const noexcept { return parent_; }
 
-	double getdata() { return data; };
-	vektor getpos()  { return pos; };
-	vektor getvel()  { return vel;};
-	//double getpot()  { return pot;};
-	vektor getforce(){ return force;};
-	unsigned int getId() { return Id; };
-	
-	void setpos( vektor p ) { pos = p; };
-	void setvel( vektor v ) { vel = v; };
+    // Non-const accessors for modification
+    [[nodiscard]] Vector3D& position() noexcept { return position_; }
+    [[nodiscard]] Vector3D& velocity() noexcept { return velocity_; }
+    [[nodiscard]] Vector3D& force() noexcept { return force_; }
 
-	void setforce( vektor f ) 
-	{ 
-		force = f; 
-		//cout<<"particle içindeki force "<<force;
-	};
+    // Setters
+    void set_position(const Vector3D& pos) noexcept { position_ = pos; }
+    void set_velocity(const Vector3D& vel) noexcept { velocity_ = vel; }
+    void set_force(const Vector3D& f) noexcept { force_ = f; }
+    void set_id(Index identity) noexcept { id_ = identity; }
+    void set_parent(Node* p) noexcept { parent_ = p; }
 
-	//void setpot ( double potential ) { pot = potential; };
-	void setId( unsigned int Identity ) { Id = Identity; };
-	
-	int calcVelPos ( double dt ) ;
+    // Leapfrog integration for velocity and position
+    void integrate(Real dt) noexcept {
+        const Vector3D acceleration = force_ / mass_;
 
-	void display() { 
-		cout<<"parent="<<parent->index;
-		cout<<" data="<<data<<" force=";
-		force.print();
-		cout<<" -pos="; 
-		pos.print(); 
-	};
+        // Leapfrog integration (kick-drift-kick)
+        velocity_ += acceleration * (0.5 * dt);
+        position_ += velocity_ * dt;
+        velocity_ += acceleration * (0.5 * dt);
+    }
+
+    // Display particle information
+    void display(std::ostream& os = std::cout) const {
+        if (parent_) {
+            os << "parent=" << parent_->index;
+        }
+        os << " mass=" << mass_ << " force=";
+        force_.print(os);
+        os << " pos=";
+        position_.print(os);
+    }
+
+private:
+    Real mass_;
+    Vector3D position_;
+    Vector3D velocity_;
+    Vector3D force_;
+    Index id_;
+    Node* parent_;  // Non-owning pointer
+
+    // Friend declaration for tree access
+    friend class BarnesHutTree;
 };
 
-typedef particle *particlePtr;
+// Type alias for backward compatibility
+using particlePtr = Particle*;
 
-
-
-#endif 
+} // namespace barnes_hut

@@ -1,102 +1,94 @@
-#ifndef _tree_h
-#define _tree_h
+#pragma once
 
-#include <vector>
 #include "particle.h"
 #include "vektor.h"
+#include <vector>
+#include <memory>
+#include <string>
+#include <span>
 
-extern double TETA;
-extern int particleLEAF;
+namespace barnes_hut {
 
-class tree
-{
-private:
-
-	Node *BHroot;					//root of the BH tree...
-	particle* treepartList;			//particle array holds the particle information.
-	double dt;						//timestep = dt example = 0.001 or 0.1 
-	long nlevel;			// # level of the tree
-	long Nparticle;
-
-	long currentNode;					//current Node in the array.
-	vector<Node> Nodelist;
-
-	long countdirectforce;
-	long countparticlecell;
-
+// Modern Barnes-Hut tree class with CPU parallelization support
+class BarnesHutTree {
 public:
-		
-	friend class particle;
+    // Constructor
+    BarnesHutTree(std::span<Particle> particles, Real timestep, Real theta, Index max_particles_per_leaf);
 
-	/* Tree construction */
-	tree( particlePtr partList , double stepsize , long N  );
+    // Rule of 5 - delete copy, default move
+    ~BarnesHutTree() = default;
+    BarnesHutTree(const BarnesHutTree&) = delete;
+    BarnesHutTree& operator=(const BarnesHutTree&) = delete;
+    BarnesHutTree(BarnesHutTree&&) noexcept = default;
+    BarnesHutTree& operator=(BarnesHutTree&&) noexcept = default;
 
-	//we need this because we can't access BHroot from main()
-	void emptytree( char *msg );
+    // Main simulation step
+    void simulation_step();
 
-	Node* getroot( void ) { return BHroot; };		//get root node of the tree..
+    // Get statistics
+    struct Statistics {
+        Index direct_force_count = 0;
+        Index particle_cell_interactions = 0;
+        Index nodes_used = 0;
+        Index nodes_available = 0;
+        double time_load = 0.0;
+        double time_upward = 0.0;
+        double time_force = 0.0;
+        double time_total = 0.0;
+    };
 
-	//find the length of one side of the root node that encloses all the particle..
-	void findroot ( const int n , particle pos[] , double &rsize  , vektor &root );
+    [[nodiscard]] const Statistics& get_statistics() const noexcept { return stats_; }
+    [[nodiscard]] std::string get_statistics_string() const;
 
-	//loadparticles with particle array and number of particle = N
-	void loadparticles();
+    // Clear tree for next iteration
+    void clear_tree();
 
-	//add particles to the tree one by one with the index that show the indix of the particle array.
-	int addparticle ( long index , particle* part , Node* root) ;
+    // Display tree (for debugging)
+    void display_tree(const Node* node = nullptr, std::ostream& os = std::cout) const;
 
-	//find the number of child of the root NODE's where the particle (part ) will be inserted.
-	int whichchild( vektor part , Node* root );
-	
-	//convert the leaf to Node but be careful when LEAF has more then 1 particle.
-	void leaf2node( Node* root , int wcld );
+private:
+    // Tree construction
+    void find_bounding_box(Vector3D& center, Real& size) const;
+    void build_tree();
+    void insert_particle(Index particle_idx, Particle& particle, Node* node);
+    [[nodiscard]] int which_child(const Vector3D& position, const Node* node) const noexcept;
+    void add_leaf(Index particle_idx, Particle& particle, Node* node, int child_idx);
+    void convert_leaf_to_internal(Node* node, int child_idx);
 
-	//add a LEAF to the root's wcld child ..
-	void addleaf( long index , particle *part , Node* root , int wcld);
+    // Tree traversal
+    void compute_mass_distribution();
+    void compute_center_of_mass(Node* node);
 
-	//upwarad pass of the tree.
-	void upwardpass( );
+    // Force calculation
+    void calculate_forces();
+    void calculate_forces_parallel();  // Parallel version
+    void interact(Particle& particle, const Node* node);
+    [[nodiscard]] bool is_well_separated(const Particle& particle, const Node& node) const noexcept;
+    void particle_cell_interaction(Particle& particle, const Node& cell);
+    void direct_force_calculation(Particle& p1, Particle& p2);
 
-	void calCMS( Node* parent ); 
-	
-	//downward pass of the tree.
-	void downwardpass( );
+    // Integration
+    void integrate_particles();
 
-	//convert multipole expansion to local expansion.
-	void interact( particle *thisparticle , Node* otherCELL );
+    // Node management
+    [[nodiscard]] Node* allocate_node();
+    void reset_node_pool() noexcept;
 
-	//if cell's well seperated return true..
-	bool wellseperate( particle thisparticle , Node othercell );
+    // Helper methods
+    void display_node(const Node* node, std::ostream& os = std::cout) const;
 
-	void particlecell( particle *part , Node* cell );
+    // Member variables
+    std::span<Particle> particles_;
+    Real dt_;
+    Real theta_;
+    Index max_particles_per_leaf_;
 
-	//calculate forces in LEAF cells but near neighbour will be calculated directly.
-	void calculateforces();
+    std::unique_ptr<Node> root_;
+    std::vector<std::unique_ptr<Node>> node_pool_;
+    Index current_node_index_;
 
-	//near neighbour will be calculated directly.
-	//void calforcenear ( long index , Node* parent ) ;
-
-	//direct force calculation with two particle index and index2 are the index of particle array.
-	void directforcalc( particle* part1 , particle *part2 );
-
-	//display whole the tree..
-	void displaytree( Node* root ) ;
-
-	//dislpay the Node information.
-	void display( Node* root );
-	
-	//calculate velocities and position..
-	void calcVelPos();
-
-	int clearNode ( Node* oldNode );
-
-	void createRepo( long N );
-
-	Node* mynew( void );
-
-	void clearNodelist();
-
+    Statistics stats_;
+    Index max_tree_level_;
 };
 
-#endif
-
+} // namespace barnes_hut

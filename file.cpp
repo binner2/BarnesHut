@@ -1,150 +1,211 @@
-/*		
-		23 Aðustos 2004						
-		version 2							
-		|-----> putsnapshot with a message that contains information
-				and the values are in scientific format not in fixed format..
-		29 nisan 2004						
-		version 1.1							
-		|-----> readfilepart() with particle class 
-		version 1	
-		|-----> file.cpp and file.h	
+#include "file.h"
+#include "stdinc.h"
+#include <fstream>
+#include <sstream>
+#include <iomanip>
 
-*/
+namespace barnes_hut {
 
-#include "file.h"							//for vector 
+std::optional<SimulationConfig> read_config_file(std::string_view filename) {
+    std::ifstream infile(filename.data());
+    if (!infile) {
+        std::cerr << "Error: Could not open file: " << filename << "\n";
+        return std::nullopt;
+    }
 
+    SimulationConfig config;
 
-/********************************************************************************************
-*    this function reads datas from a file with particle class          ************
-**   n   //number of particles"<<endl;
-**   t   //start of simulation time "<<endl;
-**   t_end   //end of simulation time"<<endl;
-**   dt   //time step of simulation"<<endl;
-**   //dt_out   //output time step of simultaion "<<endl;   
-**   mass[1]   x[1]   y[1]   z[1]   vx[1]   vy[1]   vz[1]"<<endl;
-**   mass , x,y,z coordinates and x,y,z velocities of particles.."<<endl;
-********************************************************************************************/
-int readfilePart( char* filename , long *n , particlePtr *partList , double* starttime , double* endtime , double* stepsize)
-{
-	long i; int k;
+    // Read particle count
+    if (!(infile >> config.particle_count) || config.particle_count <= 0) {
+        std::cerr << "Error: Invalid particle count\n";
+        return std::nullopt;
+    }
 
-   if ( strcmp( filename , "") == 0 ) {	/*check filename for NULL */
-      cout<<endl<<endl<<"FILENAME is NULL .."<<endl<<endl;
-      exit(3);
-   }
+    // Read start time
+    if (!(infile >> config.start_time)) {
+        std::cerr << "Error: Invalid start time\n";
+        return std::nullopt;
+    }
 
-   ifstream infile( filename  ) ;
+    // Read end time
+    if (!(infile >> config.end_time) || config.end_time <= config.start_time) {
+        std::cerr << "Error: Invalid end time (must be > start time)\n";
+        return std::nullopt;
+    }
 
-   if ( !infile ) {
-      cout<<filename<<" not found in this directory..."<<endl;
-	  exit(3);
-      return 1;
-   }
+    // Read time step
+    if (!(infile >> config.time_step) || config.time_step <= 0.0) {
+        std::cerr << "Error: Invalid time step\n";
+        return std::nullopt;
+    }
 
-   infile >> *n;				//nmumber of particles..
-   /* control n > 0 */
-   if ( *n <= 0  ) {	cout<<"number of particle="<<*n<<" must be bigger then 0";	exit(4);	}
-
-   infile >> *starttime ;
-
-   infile >> *endtime;
-   /* endtime must be greater than starttime */
-   if ( *endtime < *starttime ) 
-   {	cout<<"simulation endtime="<<*endtime<<" must be bigger than starttime="<<*starttime;exit(5); } 
-
-   infile >> *stepsize ;
-
-   /*   read data mass , position and velocities   */
-   double mass;
-
-   vektor pos , vel;         //position of n particle...
-
-   *partList = new particle[ *n ];
-   if ( partList == NULL ) {	cout<<" bellek yetersiz ";	exit(6);	}
-
-   for ( i=0; i<*n; i++ )   {
-      infile >> mass;
-	  if ( mass <= 0 ) {	cout<<"mass["<<i<<"]="<<mass<<" must be bigger than zero";	}
-		
-      for(  k=0; k < NDIM ; k++ )
-         infile >> pos[k];
-
-      for( k=0; k < NDIM ; k++ )   
-         infile >> vel[k];
-
-	  particle newpart( mass , pos , vel );
-	  (*partList)[i] = newpart;
-
-   }//for
-    
-   return 0;
+    return config;
 }
 
-/********************************************************************************************
-**				put POSITION of the system to a filename.
-**   x[1]   y[1]   z[1]   
-**   x,y,z coordinates of particles.. so we can plot with gnuplot
-********************************************************************************************/
-int putsnapshotfilePos( long n , particle* partList , const char *mesg , double tetaparam )
-{
-	long i;
+std::optional<std::vector<Particle>> read_particle_file(
+    std::string_view filename,
+    const SimulationConfig& config) {
 
-	static unsigned int counter = 1;
+    std::ifstream infile(filename.data());
+    if (!infile) {
+        std::cerr << "Error: Could not open file: " << filename << "\n";
+        return std::nullopt;
+    }
 
-	char filename[] = "snapPOS__BH100K-tetaCOUNTER.dat";
+    // Skip config data (already read)
+    Index n;
+    Real start_time, end_time, time_step;
+    infile >> n >> start_time >> end_time >> time_step;
 
-	sprintf( filename  , "snapPOS__BH%d-teta%1.2f-pLEAF%d-L%d.dat" , n/1000 , TETA , particleLEAF, counter++ );
+    if (n != config.particle_count) {
+        std::cerr << "Error: Particle count mismatch\n";
+        return std::nullopt;
+    }
 
-	ofstream outfile( filename );
+    std::vector<Particle> particles;
+    particles.reserve(config.particle_count);
 
-	outfile << mesg << " and Number of particle ="
-			<<endl<<n<<endl;
-	
+    for (Index i = 0; i < config.particle_count; ++i) {
+        Real mass;
+        Vector3D pos, vel;
 
-	for ( i=0; i<n; i++ )   {
-  
-		outfile << showpos << partList[i].getpos() << endl;
+        if (!(infile >> mass)) {
+            std::cerr << "Error: Failed to read mass for particle " << i << "\n";
+            return std::nullopt;
+        }
 
-	}//for
+        if (mass <= 0.0) {
+            std::cerr << "Error: Invalid mass for particle " << i << " (must be > 0)\n";
+            return std::nullopt;
+        }
 
-	outfile.close();
+        // Read position
+        for (int dim = 0; dim < NDIM; ++dim) {
+            if (!(infile >> pos[dim])) {
+                std::cerr << "Error: Failed to read position for particle " << i << "\n";
+                return std::nullopt;
+            }
+        }
 
-	return 0;
+        // Read velocity
+        for (int dim = 0; dim < NDIM; ++dim) {
+            if (!(infile >> vel[dim])) {
+                std::cerr << "Error: Failed to read velocity for particle " << i << "\n";
+                return std::nullopt;
+            }
+        }
 
+        particles.emplace_back(mass, pos, vel);
+    }
+
+    return particles;
 }
 
-/********************************************************************************************
-**				put FORCES of the system to a filename.
-**   x[1]   y[1]   z[1]   
-**   x,y,z coordinates of particles.. so we can plot with gnuplot
-********************************************************************************************/
-int putsnapshotfileForce( long n , particle* partList , const char *mesg  )
-{
-	long i;
+bool write_particle_positions(
+    std::span<const Particle> particles,
+    std::string_view message,
+    Real theta,
+    Index particles_per_leaf,
+    std::string_view base_filename) {
 
-	static unsigned int counter = 1;
+    static Index counter = 1;
 
-	char filename[100] = "snapFORCE_BHCOUNTER.dat";
+    std::ostringstream filename;
+    filename << base_filename << "_BH"
+             << particles.size() / 1000 << "K"
+             << "_theta" << std::fixed << std::setprecision(2) << theta
+             << "_pLeaf" << particles_per_leaf
+             << "_" << counter++ << ".dat";
 
-//%s yerine lota yüzünden %d gelmeli..
+    std::ofstream outfile(filename.str());
+    if (!outfile) {
+        std::cerr << "Error: Could not create output file: " << filename.str() << "\n";
+        return false;
+    }
 
+    outfile << message << "\nNumber of particles = " << particles.size() << "\n\n";
 
-	sprintf( filename  , "snapFORCE__BH%dK-teta%1.2f-pLEAF%d-Step-%d.dat" , n/1000 , TETA , particleLEAF, counter++ );
+    outfile << std::showpos << std::scientific << std::setprecision(6);
+    for (const auto& particle : particles) {
+        outfile << particle.position() << "\n";
+    }
 
-	ofstream outfile( filename );
-
-	outfile.precision(40);
-	
-	outfile << mesg <<endl<<n<<endl;
-	
-	for ( i=0; i<n; i++ )   {
-  
-      outfile << showpos << partList[i].getforce() << endl;
-
-   }//for
-
-	outfile.close();
-
-	return 0;
-
+    std::cout << "Wrote positions to: " << filename.str() << "\n";
+    return true;
 }
+
+bool write_particle_forces(
+    std::span<const Particle> particles,
+    std::string_view message,
+    Real theta,
+    Index particles_per_leaf,
+    std::string_view base_filename) {
+
+    static Index counter = 1;
+
+    std::ostringstream filename;
+    filename << base_filename << "_BH"
+             << particles.size() / 1000 << "K"
+             << "_theta" << std::fixed << std::setprecision(2) << theta
+             << "_pLeaf" << particles_per_leaf
+             << "_" << counter++ << ".dat";
+
+    std::ofstream outfile(filename.str());
+    if (!outfile) {
+        std::cerr << "Error: Could not create output file: " << filename.str() << "\n";
+        return false;
+    }
+
+    outfile << message << "\n" << particles.size() << "\n\n";
+
+    outfile << std::showpos << std::scientific << std::setprecision(40);
+    for (const auto& particle : particles) {
+        outfile << particle.force() << "\n";
+    }
+
+    std::cout << "Wrote forces to: " << filename.str() << "\n";
+    return true;
+}
+
+bool generate_test_data(std::string_view filename, const SimulationConfig& config) {
+    if (!config.is_valid()) {
+        std::cerr << "Error: Invalid configuration\n";
+        return false;
+    }
+
+    std::ofstream outfile(filename.data());
+    if (!outfile) {
+        std::cerr << "Error: Could not create file: " << filename << "\n";
+        return false;
+    }
+
+    // Write configuration
+    outfile << config.particle_count << "\n"
+            << config.start_time << "\n"
+            << config.end_time << "\n"
+            << config.time_step << "\n";
+
+    // Generate random particles
+    for (Index i = 0; i < config.particle_count; ++i) {
+        // Mass between 5000 and 15000
+        const Real mass = generate_random(5000.0, 15000.0);
+        outfile << mass;
+
+        // Position between 0 and 10
+        for (int dim = 0; dim < NDIM; ++dim) {
+            outfile << " " << generate_random(0.0, 10.0);
+        }
+
+        // Velocity between 0 and 100
+        for (int dim = 0; dim < NDIM; ++dim) {
+            outfile << " " << generate_random(0.0, 100.0);
+        }
+
+        outfile << "\n";
+    }
+
+    std::cout << "Generated test data in: " << filename << "\n";
+    return true;
+}
+
+} // namespace barnes_hut

@@ -120,7 +120,7 @@ void BarnesHutTree::build_tree() {
                 continue;
             }
 
-            auto& child = current->children[child_idx];
+            auto* child = current->children[child_idx];
 
             if (!child || child->type == NodeType::Empty) {
                 // Add new leaf
@@ -133,7 +133,7 @@ void BarnesHutTree::build_tree() {
                 if (child->particle_count < max_particles_per_leaf_) {
                     child->particle_count++;
                     child->particle_list.push_back(&particles_[i]);
-                    particles_[i].set_parent(child.get());
+                    particles_[i].set_parent(child);
                     current->particle_count++;
                     inserted = true;
                 }
@@ -141,12 +141,12 @@ void BarnesHutTree::build_tree() {
                     // Convert leaf to internal node
                     convert_leaf_to_internal(current, child_idx);
                     current->particle_count++;
-                    current = child.get();
+                    current = current->children[child_idx];
                 }
             }
             else if (child->type == NodeType::Internal) {
                 current->particle_count++;
-                current = child.get();
+                current = child;
             }
         }
     }
@@ -188,7 +188,7 @@ void BarnesHutTree::add_leaf(Index particle_idx, Particle& particle, Node* node,
     }
 
     // Transfer ownership to parent
-    node->children[child_idx] = std::unique_ptr<Node>(new_leaf);
+    node->children[child_idx] = new_leaf;
     new_leaf->parent = node;
 
     // Update max tree level
@@ -196,7 +196,7 @@ void BarnesHutTree::add_leaf(Index particle_idx, Particle& particle, Node* node,
 }
 
 void BarnesHutTree::convert_leaf_to_internal(Node* node, int child_idx) {
-    auto* old_leaf = node->children[child_idx].get();
+    auto* old_leaf = node->children[child_idx];
 
     // Save particle list
     auto temp_particle_list = std::move(old_leaf->particle_list);
@@ -212,29 +212,29 @@ void BarnesHutTree::convert_leaf_to_internal(Node* node, int child_idx) {
 
 void BarnesHutTree::insert_particle(Index particle_idx, Particle& particle, Node* node) {
     const int child_idx = which_child(particle.position(), node);
-    auto& child = node->children[child_idx];
+    auto* child = node->children[child_idx];
 
     if (!child || child->type == NodeType::Empty) {
         add_leaf(particle_idx, particle, node, child_idx);
         node->particle_count++;
-        child->parent = node;
+        // Child is updated in add_leaf
     }
     else if (child->type == NodeType::Leaf) {
         if (child->particle_count < max_particles_per_leaf_) {
             child->particle_count++;
             child->particle_list.push_back(&particle);
-            particle.set_parent(child.get());
+            particle.set_parent(child);
             node->particle_count++;
         }
         else {
             convert_leaf_to_internal(node, child_idx);
             node->particle_count++;
-            insert_particle(particle_idx, particle, child.get());
+            insert_particle(particle_idx, particle, node->children[child_idx]);
         }
     }
     else if (child->type == NodeType::Internal) {
         node->particle_count++;
-        insert_particle(particle_idx, particle, child.get());
+        insert_particle(particle_idx, particle, child);
     }
 }
 
@@ -267,9 +267,9 @@ void BarnesHutTree::compute_center_of_mass(Node* node) {
         Vector3D cms{0.0};
         Real total_mass = 0.0;
 
-        for (auto& child : node->children) {
+        for (auto* child : node->children) {
             if (child && child->type != NodeType::Empty) {
-                compute_center_of_mass(child.get());
+                compute_center_of_mass(child);
                 cms += child->mass * child->mass_center;
                 total_mass += child->mass;
             }
@@ -290,9 +290,9 @@ void BarnesHutTree::calculate_forces() {
 
     // Calculate forces for each particle
     for (auto& particle : particles_) {
-        for (const auto& child : root_->children) {
+        for (auto* child : root_->children) {
             if (child && child->type != NodeType::Empty) {
-                interact(particle, child.get());
+                interact(particle, child);
             }
         }
     }
@@ -308,9 +308,9 @@ void BarnesHutTree::calculate_forces_parallel() {
     // Calculate forces in parallel
     #pragma omp parallel for schedule(dynamic)
     for (Index i = 0; i < particles_.size(); ++i) {
-        for (const auto& child : root_->children) {
+        for (auto* child : root_->children) {
             if (child && child->type != NodeType::Empty) {
-                interact(particles_[i], child.get());
+                interact(particles_[i], child);
             }
         }
     }
@@ -335,9 +335,9 @@ void BarnesHutTree::interact(Particle& particle, const Node* node) {
     else {
         // Need to go deeper
         if (node->type == NodeType::Internal) {
-            for (const auto& child : node->children) {
+            for (auto* child : node->children) {
                 if (child && child->type != NodeType::Empty) {
-                    interact(particle, child.get());
+                    interact(particle, child);
                 }
             }
         }
@@ -434,7 +434,7 @@ void BarnesHutTree::display_tree(const Node* node, std::ostream& os) const {
         display_node(node, os);
         for (int i = 0; i < NSUB; ++i) {
             if (node->children[i] && node->children[i]->type != NodeType::Empty) {
-                display_tree(node->children[i].get(), os);
+                display_tree(node->children[i], os);
             }
         }
     }

@@ -17,6 +17,10 @@
 #include <vector>
 #include <memory>
 
+#ifdef _OPENMP
+#include <omp.h>
+#endif
+
 using namespace barnes_hut;
 
 void print_usage(const char* program_name) {

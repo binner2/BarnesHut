@@ -52,4 +52,7 @@ private:
     TimePoint start_;
 };
 
+// Function declarations
+double generate_random(double min_val, double max_val);
+
 } // namespace barnes_hut

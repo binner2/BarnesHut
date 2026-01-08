@@ -27,7 +27,7 @@ struct alignas(64) Node {  // Cache-line aligned for better performance
     std::vector<class Particle*> particle_list;  // For leaf nodes
     Index particle_count = 0;
     Index level = 0;
-    std::array<std::unique_ptr<Node>, NSUB> children;  // Smart pointers!
+    std::array<Node*, NSUB> children{};  // Non-owning pointers (owned by pool)
     Node* parent = nullptr;  // Non-owning pointer
 
     // Rule of 5 - default move, delete copy
@@ -48,9 +48,7 @@ struct alignas(64) Node {  // Cache-line aligned for better performance
         particle_list.clear();
         particle_count = 0;
         level = 0;
-        for (auto& child : children) {
-            child.reset();
-        }
+        children.fill(nullptr);
         parent = nullptr;
     }
 };

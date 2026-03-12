@@ -39,16 +39,17 @@ else()
     message(WARNING "OpenMP not found - using serial execution")
 endif()
 
-# CUDA configuration
+# CUDA configuration (CUDA 13.2+ recommended)
 enable_language(CUDA)
 find_package(CUDAToolkit REQUIRED)
-set(CMAKE_CUDA_STANDARD 17)
+set(CMAKE_CUDA_STANDARD 20)
 set(CMAKE_CUDA_STANDARD_REQUIRED ON)
-set(CMAKE_CUDA_ARCHITECTURES 75 80 86 89)  # Support for Turing, Ampere, Ada Lovelace
+# Support for Turing, Ampere, Ada Lovelace, Blackwell architectures
+set(CMAKE_CUDA_ARCHITECTURES 75 80 86 89 100 120)
 
 # CUDA flags
 if(CMAKE_BUILD_TYPE MATCHES Release)
-    set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -O3 -use_fast_math --expt-relaxed-constexpr")
+    set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -O3 -use_fast_math --expt-relaxed-constexpr --expt-extended-lambda")
 else()
     set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -G -g -O0")
 endif()
@@ -112,6 +113,39 @@ endif()
 # Installation
 install(TARGETS barnes_hut_sim generate_data visualize_quadtree
         RUNTIME DESTINATION bin)
+
+# CUDA 13.2 Benchmark executable
+set(CUDA13_SOURCES
+    cuda_13_2/bh_cuda_kernels.cu
+    cuda_13_2/benchmark_framework.cu
+)
+
+add_executable(benchmark_cuda13
+    cuda_13_2/test_scenarios.cpp
+    ${CUDA13_SOURCES}
+    ${CORE_SOURCES}
+)
+
+target_include_directories(benchmark_cuda13 PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/cuda_13_2
+)
+
+target_link_libraries(benchmark_cuda13 PRIVATE
+    CUDA::cudart
+    CUDA::cuda_driver
+)
+
+if(OpenMP_CXX_FOUND)
+    target_link_libraries(benchmark_cuda13 PRIVATE OpenMP::OpenMP_CXX)
+endif()
+
+set_target_properties(benchmark_cuda13 PROPERTIES
+    CUDA_SEPARABLE_COMPILATION ON
+    CUDA_RESOLVE_DEVICE_SYMBOLS ON
+)
+
+install(TARGETS benchmark_cuda13 RUNTIME DESTINATION bin)
 
 # Visualization executable with CUDA and OpenGL
 if(ENABLE_VISUALIZATION)
@@ -177,6 +211,8 @@ message(STATUS "CUDA Standard: ${CMAKE_CUDA_STANDARD}")
 message(STATUS "Compiler: ${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION}")
 message(STATUS "OpenMP: ${OpenMP_CXX_FOUND}")
 message(STATUS "CUDA: ${CUDAToolkit_FOUND} (${CUDAToolkit_VERSION})")
+message(STATUS "CUDA Architectures: ${CMAKE_CUDA_ARCHITECTURES}")
 message(STATUS "Visualization: ${ENABLE_VISUALIZATION}")
+message(STATUS "Benchmark: ON (benchmark_cuda13)")
 message(STATUS "=================================")
 message(STATUS "")

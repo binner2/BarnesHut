@@ -336,8 +336,7 @@ StepBreakdown benchmark_gpu_direct(
 
     for (int step = 0; step < num_steps; ++step) {
         double t0 = now_ms();
-        sim.step();
-        cudaDeviceSynchronize();
+        sim.step();  // Internally synchronizes via cudaEventSynchronize
         double t1 = now_ms();
         total_times.push_back(t1 - t0);
     }
@@ -406,6 +405,16 @@ CorrectnessResult validate_forces(
         double rfx = ref_fx[i], rfy = ref_fy[i], rfz = ref_fz[i];
         double tfx = test_fx[i], tfy = test_fy[i], tfz = test_fz[i];
 
+        // Skip NaN/Inf values — GPU kernel failure or numerical instability
+        if (std::isnan(rfx) || std::isnan(rfy) || std::isnan(rfz) ||
+            std::isnan(tfx) || std::isnan(tfy) || std::isnan(tfz) ||
+            std::isinf(rfx) || std::isinf(rfy) || std::isinf(rfz) ||
+            std::isinf(tfx) || std::isinf(tfy) || std::isinf(tfz)) {
+            result.max_relative_error = std::numeric_limits<double>::infinity();
+            result.passed = false;
+            continue;
+        }
+
         double ref_mag = std::sqrt(rfx*rfx + rfy*rfy + rfz*rfz);
         double diff_x = rfx - tfx, diff_y = rfy - tfy, diff_z = rfz - tfz;
         double diff_mag = std::sqrt(diff_x*diff_x + diff_y*diff_y + diff_z*diff_z);
@@ -424,7 +433,7 @@ CorrectnessResult validate_forces(
     if (valid_count > 0) {
         result.mean_relative_error = sum_rel_error / valid_count;
     }
-    result.l2_norm_error = std::sqrt(sum_diff_sq) / std::sqrt(sum_ref_sq + 1e-30);
+    result.l2_norm_error = std::sqrt(sum_diff_sq) / std::sqrt(sum_ref_sq + 1e-10);
     result.passed = (result.max_relative_error <= tolerance);
 
     return result;
@@ -492,7 +501,8 @@ std::vector<BenchmarkResult> run_benchmark_suite(const BenchmarkConfig& config) 
             px0 = px; py0 = py; pz0 = pz;
             vx0 = vx; vy0 = vy; vz0 = vz;
 
-            // Reference forces (from CPU serial, first step only)
+            // Reference forces: run CPU serial for same number of steps as benchmark,
+            // then compare final-step forces across all methods (all start from same state).
             std::vector<float> ref_fx(N), ref_fy(N), ref_fz(N);
 
             // ---- CPU Serial ----
@@ -506,7 +516,8 @@ std::vector<BenchmarkResult> run_benchmark_suite(const BenchmarkConfig& config) 
                     N, config, config.warmup_steps + config.measured_steps
                 );
 
-                // Save reference forces
+                // Save forces from final step as reference for correctness comparison.
+                // All methods run same number of steps from same initial state.
                 ref_fx = fx; ref_fy = fy; ref_fz = fz;
 
                 BenchmarkResult res;
@@ -515,7 +526,7 @@ std::vector<BenchmarkResult> run_benchmark_suite(const BenchmarkConfig& config) 
                 res.particle_count = N;
                 res.timing = timing;
                 res.speedup_vs_serial = 1.0;
-                res.particles_per_second = N / (timing.total.mean_ms / 1000.0);
+                res.particles_per_second = N / (std::max(timing.total.mean_ms, 0.001) / 1000.0);
                 res.correctness = {0.0, 0.0, 0.0, true};
 
                 std::cout << "    CPU Serial:  " << std::fixed << std::setprecision(2)
@@ -551,7 +562,7 @@ std::vector<BenchmarkResult> run_benchmark_suite(const BenchmarkConfig& config) 
                 res.particle_count = N;
                 res.timing = timing;
                 res.speedup_vs_serial = serial_time / timing.total.mean_ms;
-                res.particles_per_second = N / (timing.total.mean_ms / 1000.0);
+                res.particles_per_second = N / (std::max(timing.total.mean_ms, 0.001) / 1000.0);
                 res.correctness = correctness;
 
                 std::cout << "    CPU OpenMP:  " << std::fixed << std::setprecision(2)
@@ -586,7 +597,7 @@ std::vector<BenchmarkResult> run_benchmark_suite(const BenchmarkConfig& config) 
                 res.particle_count = N;
                 res.timing = timing;
                 res.speedup_vs_serial = serial_time / std::max(timing.total.mean_ms, 0.001);
-                res.particles_per_second = N / (timing.total.mean_ms / 1000.0);
+                res.particles_per_second = N / (std::max(timing.total.mean_ms, 0.001) / 1000.0);
                 res.correctness = correctness;
 
                 std::cout << "    GPU Direct:  " << std::fixed << std::setprecision(2)
@@ -622,7 +633,7 @@ std::vector<BenchmarkResult> run_benchmark_suite(const BenchmarkConfig& config) 
                 res.particle_count = N;
                 res.timing = timing;
                 res.speedup_vs_serial = serial_time / std::max(timing.total.mean_ms, 0.001);
-                res.particles_per_second = N / (timing.total.mean_ms / 1000.0);
+                res.particles_per_second = N / (std::max(timing.total.mean_ms, 0.001) / 1000.0);
                 res.correctness = correctness;
 
                 std::cout << "    GPU BH:      " << std::fixed << std::setprecision(2)

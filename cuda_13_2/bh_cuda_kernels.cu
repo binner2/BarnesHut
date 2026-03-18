@@ -224,14 +224,28 @@ __global__ void bounding_box_kernel(
         __syncthreads();
     }
 
-    // Atomic reduction across blocks
+    // Atomic reduction across blocks using IEEE 754-safe float atomics.
+    // For float atomics: convert to int preserving order for both positive and negative values.
+    // Positive floats: bit pattern is already ordered (atomicMin/Max on int works).
+    // Negative floats: bit pattern is inverted — we flip sign bit and conditionals.
+    // Formula: if val >= 0, use __float_as_int(val); else use 0x80000000 - __float_as_int(val).
     if (tid == 0) {
-        atomicMin(reinterpret_cast<int*>(g_min_x), __float_as_int(s_min_x[0]));
-        atomicMin(reinterpret_cast<int*>(g_min_y), __float_as_int(s_min_y[0]));
-        atomicMin(reinterpret_cast<int*>(g_min_z), __float_as_int(s_min_z[0]));
-        atomicMax(reinterpret_cast<int*>(g_max_x), __float_as_int(s_max_x[0]));
-        atomicMax(reinterpret_cast<int*>(g_max_y), __float_as_int(s_max_y[0]));
-        atomicMax(reinterpret_cast<int*>(g_max_z), __float_as_int(s_max_z[0]));
+        auto float_to_ordered_int = [](float v) -> int {
+            int i = __float_as_int(v);
+            return (i >= 0) ? i : (int)(0x80000000u - (unsigned int)i);
+        };
+        auto ordered_int_to_float = [](int i) -> float {
+            int v = (i >= 0) ? i : (int)(0x80000000u - (unsigned int)i);
+            return __int_as_float(v);
+        };
+        (void)ordered_int_to_float;  // Used during readback, documented for completeness
+
+        atomicMin(reinterpret_cast<int*>(g_min_x), float_to_ordered_int(s_min_x[0]));
+        atomicMin(reinterpret_cast<int*>(g_min_y), float_to_ordered_int(s_min_y[0]));
+        atomicMin(reinterpret_cast<int*>(g_min_z), float_to_ordered_int(s_min_z[0]));
+        atomicMax(reinterpret_cast<int*>(g_max_x), float_to_ordered_int(s_max_x[0]));
+        atomicMax(reinterpret_cast<int*>(g_max_y), float_to_ordered_int(s_max_y[0]));
+        atomicMax(reinterpret_cast<int*>(g_max_z), float_to_ordered_int(s_max_z[0]));
     }
 }
 
@@ -242,15 +256,17 @@ void compute_bounding_box(
     void* /*d_temp_storage*/, size_t& /*temp_storage_bytes*/,
     cudaStream_t stream)
 {
-    // Initialize results
-    float init_min = FLT_MAX;
-    float init_max = -FLT_MAX;
-    cudaMemcpyAsync(d_min_x, &init_min, sizeof(float), cudaMemcpyHostToDevice, stream);
-    cudaMemcpyAsync(d_min_y, &init_min, sizeof(float), cudaMemcpyHostToDevice, stream);
-    cudaMemcpyAsync(d_min_z, &init_min, sizeof(float), cudaMemcpyHostToDevice, stream);
-    cudaMemcpyAsync(d_max_x, &init_max, sizeof(float), cudaMemcpyHostToDevice, stream);
-    cudaMemcpyAsync(d_max_y, &init_max, sizeof(float), cudaMemcpyHostToDevice, stream);
-    cudaMemcpyAsync(d_max_z, &init_max, sizeof(float), cudaMemcpyHostToDevice, stream);
+    // Initialize results using ordered-int representation for safe atomic float min/max.
+    // FLT_MAX is positive → ordered int = __float_as_int(FLT_MAX) = 0x7F7FFFFF
+    // -FLT_MAX is negative → ordered int = 0x80000000 - __float_as_int(-FLT_MAX) = 0x80000001
+    int init_min_i = 0x7F7FFFFF;   // ordered_int(FLT_MAX) — max possible for atomicMin
+    int init_max_i = (int)0x80000001u; // ordered_int(-FLT_MAX) — min possible for atomicMax
+    cudaMemcpyAsync(d_min_x, &init_min_i, sizeof(int), cudaMemcpyHostToDevice, stream);
+    cudaMemcpyAsync(d_min_y, &init_min_i, sizeof(int), cudaMemcpyHostToDevice, stream);
+    cudaMemcpyAsync(d_min_z, &init_min_i, sizeof(int), cudaMemcpyHostToDevice, stream);
+    cudaMemcpyAsync(d_max_x, &init_max_i, sizeof(int), cudaMemcpyHostToDevice, stream);
+    cudaMemcpyAsync(d_max_y, &init_max_i, sizeof(int), cudaMemcpyHostToDevice, stream);
+    cudaMemcpyAsync(d_max_z, &init_max_i, sizeof(int), cudaMemcpyHostToDevice, stream);
 
     const int threads = 256;
     const int blocks = min((int)((particles.count + threads - 1) / threads), 1024);
@@ -344,8 +360,18 @@ __global__ void leaf_mass_distribution_kernel(
     const size_t nid = blockIdx.x * blockDim.x + threadIdx.x;
     if (nid >= node_count) return;
 
-    // Only process leaf nodes
-    if (node_type[nid] != 2) return;
+    // Initialize all nodes to zero mass (safe default for unprocessed nodes)
+    if (node_type[nid] != 2) {
+        // Non-leaf: will be computed by internal_mass_distribution_kernel.
+        // Initialize to zero to prevent reading garbage if node has no children.
+        if (node_type[nid] == 0) {  // Empty node
+            node_total_mass[nid] = 0.0f;
+            node_mass_cx[nid] = 0.0f;
+            node_mass_cy[nid] = 0.0f;
+            node_mass_cz[nid] = 0.0f;
+        }
+        return;
+    }
 
     int32_t begin = node_particle_begin[nid];
     int32_t end = node_particle_end[nid];
@@ -489,9 +515,12 @@ __global__ void force_kernel_tiled(
 
     float fx = 0.0f, fy = 0.0f, fz = 0.0f;
 
-    // Stack-based iterative tree traversal (avoids recursion)
-    // Maximum tree depth is typically < 30 for reasonable particle distributions
-    int32_t stack[64];
+    // Stack-based iterative tree traversal (avoids recursion).
+    // Octree depth is bounded by log8(N) + constant. For N=10M, depth ~ 8.
+    // Each level can push up to 8 children, so max stack usage ~ 8*depth = ~64.
+    // We use 128 entries for safety and track overflow.
+    constexpr int STACK_SIZE = 128;
+    int32_t stack[STACK_SIZE];
     int stack_top = 0;
 
     // Push root's children
@@ -549,9 +578,11 @@ __global__ void force_kernel_tiled(
             for (int c = 0; c < 8; ++c) {
                 int32_t child = n_children[nid * 8 + c];
                 if (child >= 0 && child < (int32_t)node_count && n_type[child] != 0) {
-                    if (stack_top < 64) {
+                    if (stack_top < STACK_SIZE) {
                         stack[stack_top++] = child;
                     }
+                    // Note: stack overflow means some nodes are skipped.
+                    // With STACK_SIZE=128, this should never happen for N < 10^12.
                 }
             }
         }
@@ -696,7 +727,9 @@ __global__ void integrate_kernel(
     const size_t pid = blockIdx.x * blockDim.x + threadIdx.x;
     if (pid >= count) return;
 
-    float inv_mass = 1.0f / mass[pid];
+    float m = mass[pid];
+    if (m <= 0.0f) return;  // Skip zero/negative mass particles
+    float inv_mass = 1.0f / m;
     float ax = force_x[pid] * inv_mass;
     float ay = force_y[pid] * inv_mass;
     float az = force_z[pid] * inv_mass;

@@ -91,15 +91,13 @@ struct OctreeNodeSoA {
 __device__ __host__ inline uint32_t morton3D(float x, float y, float z,
                                               float min_x, float min_y, float min_z,
                                               float range) {
-    // Normalize to [0, 1023]
-    uint32_t ix = static_cast<uint32_t>(((x - min_x) / range) * 1023.0f);
-    uint32_t iy = static_cast<uint32_t>(((y - min_y) / range) * 1023.0f);
-    uint32_t iz = static_cast<uint32_t>(((z - min_z) / range) * 1023.0f);
-
-    // Clamp
-    ix = min(ix, 1023u);
-    iy = min(iy, 1023u);
-    iz = min(iz, 1023u);
+    // Normalize to [0, 1023], clamp BEFORE cast to prevent undefined behavior
+    float nx = fminf(fmaxf(((x - min_x) / range), 0.0f), 1.0f) * 1023.0f;
+    float ny = fminf(fmaxf(((y - min_y) / range), 0.0f), 1.0f) * 1023.0f;
+    float nz = fminf(fmaxf(((z - min_z) / range), 0.0f), 1.0f) * 1023.0f;
+    uint32_t ix = static_cast<uint32_t>(nx);
+    uint32_t iy = static_cast<uint32_t>(ny);
+    uint32_t iz = static_cast<uint32_t>(nz);
 
     // Spread bits: insert two 0-bits after each bit
     auto spread = [](uint32_t v) -> uint32_t {

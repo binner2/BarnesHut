@@ -13,6 +13,7 @@
  */
 
 #include "benchmark_framework.cuh"
+#include <cuda_runtime.h>
 #include <iostream>
 #include <string>
 #include <cstring>
@@ -541,6 +542,14 @@ void test_gpu_correctness() {
                              vx.data(), vy.data(), vz.data(),
                              gpu_fx.data(), gpu_fy.data(), gpu_fz.data(),
                              N, config, 1);
+
+        // Check for CUDA kernel launch errors
+        cudaError_t cuda_err = cudaGetLastError();
+        if (cuda_err != cudaSuccess) {
+            std::cerr << "  CUDA kernel error: " << cudaGetErrorString(cuda_err) << "\n";
+            TEST_ASSERT(false, "GPU kernel basarılı calıstı (" + std::string(distribution_name(dist)) + ")");
+            continue;
+        }
 
         auto result = validate_forces(
             cpu_fx.data(), cpu_fy.data(), cpu_fz.data(),

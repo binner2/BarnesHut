@@ -59,7 +59,8 @@ public:
         int projection = 0;                // 0=XY, 1=XZ, 2=YZ
     };
 
-    QuadtreeVisualizer(const Config& config = Config{})
+    QuadtreeVisualizer() : QuadtreeVisualizer(Config{}) {}
+    explicit QuadtreeVisualizer(const Config& config)
         : config_(config), colors_(ColorScheme{}) {}
 
     // Main visualization function
@@ -210,7 +211,7 @@ private:
         // Recursively draw children
         for (const auto& child : node->children) {
             if (child) {
-                draw_node_boxes(file, child.get(), bbox);
+                draw_node_boxes(file, child, bbox);
             }
         }
     }
@@ -247,7 +248,7 @@ private:
                     if (clustered[j]) continue;
 
                     const auto& p2 = particles[j];
-                    const double dist = (p1.position() - p2.position()).length();
+                    const double dist = (p1.position() - p2.position()).magnitude();
 
                     if (dist < config_.cluster_threshold) {
                         cluster_members.push_back(j);
@@ -316,7 +317,7 @@ private:
         // Recursively draw children mass centers
         for (const auto& child : node->children) {
             if (child) {
-                draw_mass_centers(file, child.get(), bbox);
+                draw_mass_centers(file, child, bbox);
             }
         }
     }

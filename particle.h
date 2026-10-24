@@ -27,7 +27,7 @@ struct alignas(64) Node {  // Cache-line aligned for better performance
     std::vector<class Particle*> particle_list;  // For leaf nodes
     Index particle_count = 0;
     Index level = 0;
-    std::array<std::unique_ptr<Node>, NSUB> children;  // Smart pointers!
+    std::array<Node*, NSUB> children{};  // Non-owning; every Node is owned by the tree's node pool
     Node* parent = nullptr;  // Non-owning pointer
 
     // Rule of 5 - default move, delete copy
@@ -48,9 +48,7 @@ struct alignas(64) Node {  // Cache-line aligned for better performance
         particle_list.clear();
         particle_count = 0;
         level = 0;
-        for (auto& child : children) {
-            child.reset();
-        }
+        children.fill(nullptr);
         parent = nullptr;
     }
 };
@@ -102,15 +100,12 @@ public:
     void set_id(Index identity) noexcept { id_ = identity; }
     void set_parent(Node* p) noexcept { parent_ = p; }
 
-    // Leapfrog integration for velocity and position
-    void integrate(Real dt) noexcept {
-        const Vector3D acceleration = force_ / mass_;
-
-        // Leapfrog integration (kick-drift-kick)
-        velocity_ += acceleration * (0.5 * dt);
-        position_ += velocity_ * dt;
-        velocity_ += acceleration * (0.5 * dt);
-    }
+    // Leapfrog (kick-drift-kick) building blocks. A full step is
+    // kick(dt/2) -> drift(dt) -> recompute forces -> kick(dt/2); the second
+    // kick must use the force at the drifted position, otherwise the scheme
+    // degenerates to first-order (non-symplectic) Euler in the velocity.
+    void kick(Real h) noexcept { velocity_ += force_ * (h / mass_); }
+    void drift(Real dt) noexcept { position_ += velocity_ * dt; }
 
     // Display particle information
     void display(std::ostream& os = std::cout) const {

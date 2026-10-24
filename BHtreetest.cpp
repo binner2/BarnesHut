@@ -16,6 +16,12 @@
 #include <string>
 #include <vector>
 #include <memory>
+#include <sstream>
+#include <cmath>
+
+#ifdef _OPENMP
+#include <omp.h>
+#endif
 
 using namespace barnes_hut;
 
@@ -81,21 +87,23 @@ int main(int argc, char* argv[]) {
     // Create Barnes-Hut tree
     BarnesHutTree tree(particles, config.time_step, theta, particles_per_leaf);
 
-    // Simulation loop
+    // Simulation loop. Snapshot decisions use the integer step counter:
+    // accumulating a floating-point output time drifts by one step.
     Index step = 0;
     Real current_time = config.start_time;
 
-    const Real output_interval = (config.end_time - config.start_time) / 10.0;
-    Real next_output_time = config.start_time + output_interval;
+    const auto total_steps = static_cast<Index>(
+        std::llround((config.end_time - config.start_time) / config.time_step));
+    const Index output_every = std::max<Index>(1, total_steps / 10);
 
     Timer simulation_timer;
 
-    while (current_time < config.end_time) {
+    while (step < total_steps) {
         // Perform one simulation step
         tree.simulation_step();
 
-        current_time += config.time_step;
         step++;
+        current_time = config.start_time + static_cast<Real>(step) * config.time_step;
 
         // Print statistics
         const auto& stats = tree.get_statistics();
@@ -113,7 +121,7 @@ int main(int argc, char* argv[]) {
         }
 
         // Write snapshot if needed
-        if (current_time >= next_output_time) {
+        if (step % output_every == 0) {
             std::ostringstream message;
             message << tree.get_statistics_string();
 
@@ -124,7 +132,6 @@ int main(int argc, char* argv[]) {
                 particles_per_leaf
             );
 
-            next_output_time += output_interval;
         }
 
         // Clear tree for next iteration

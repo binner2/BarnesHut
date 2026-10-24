@@ -4,6 +4,7 @@
 #include <sstream>
 #include <limits>
 #include <iomanip>
+#include <cstdint>
 
 #ifdef _OPENMP
 #include <omp.h>
@@ -31,33 +32,39 @@ BarnesHutTree::BarnesHutTree(std::span<Particle> particles, Real timestep, Real 
 
 void BarnesHutTree::simulation_step() {
     Timer total_timer;
+
+    // Initial conditions: forces at t0 are needed by the first half-kick.
+    if (!forces_valid_) {
+        compute_forces();
+    }
+
+    const Real half_dt = 0.5 * dt_;
+    kick_particles(half_dt);   // v(t + dt/2) = v(t) + a(x(t)) dt/2
+    drift_particles(dt_);      // x(t + dt)   = x(t) + v(t + dt/2) dt
+    compute_forces();          // a(x(t + dt)), resets stats_
+    kick_particles(half_dt);   // v(t + dt)   = v(t + dt/2) + a(x(t + dt)) dt/2
+
+    stats_.time_total = total_timer.elapsed();
+}
+
+void BarnesHutTree::compute_forces() {
     stats_ = Statistics{};
 
-    // Build tree
     Timer load_timer;
     build_tree();
     stats_.time_load = load_timer.elapsed();
 
-    // Compute mass distribution
     Timer upward_timer;
     compute_mass_distribution();
     stats_.time_upward = upward_timer.elapsed();
 
-    // Calculate forces
     Timer force_timer;
-    #ifdef _OPENMP
-    calculate_forces_parallel();
-    #else
     calculate_forces();
-    #endif
     stats_.time_force = force_timer.elapsed();
 
-    // Integrate particles
-    integrate_particles();
-
-    stats_.time_total = total_timer.elapsed();
     stats_.nodes_used = current_node_index_;
     stats_.nodes_available = node_pool_.size();
+    forces_valid_ = true;
 }
 
 void BarnesHutTree::clear_tree() {
@@ -96,59 +103,23 @@ void BarnesHutTree::find_bounding_box(Vector3D& center, Real& size) const {
 }
 
 void BarnesHutTree::build_tree() {
+    clear_tree();
+    max_tree_level_ = 0;
+
     // Find bounding box
     Vector3D center{0.0};
     Real size = 0.0;
     find_bounding_box(center, size);
 
     // Setup root node
-    root_->reset();
+    root_->type = NodeType::Internal;
     root_->geo_center = center;
     root_->size = size;
     root_->level = 0;
     root_->index = 0;
 
-    // Insert all particles
-    for (Index i = 0; i < particles_.size(); ++i) {
-        Node* current = root_.get();
-        bool inserted = false;
-
-        while (!inserted) {
-            const int child_idx = which_child(particles_[i].position(), current);
-            if (child_idx < 0) {
-                // Error in calculation
-                continue;
-            }
-
-            auto& child = current->children[child_idx];
-
-            if (!child || child->type == NodeType::Empty) {
-                // Add new leaf
-                add_leaf(i, particles_[i], current, child_idx);
-                current->particle_count++;
-                inserted = true;
-            }
-            else if (child->type == NodeType::Leaf) {
-                // Check if we can add to existing leaf
-                if (child->particle_count < max_particles_per_leaf_) {
-                    child->particle_count++;
-                    child->particle_list.push_back(&particles_[i]);
-                    particles_[i].set_parent(child.get());
-                    current->particle_count++;
-                    inserted = true;
-                }
-                else {
-                    // Convert leaf to internal node
-                    convert_leaf_to_internal(current, child_idx);
-                    current->particle_count++;
-                    current = child.get();
-                }
-            }
-            else if (child->type == NodeType::Internal) {
-                current->particle_count++;
-                current = child.get();
-            }
-        }
+    for (auto& particle : particles_) {
+        insert_particle(particle, root_.get());
     }
 }
 
@@ -161,14 +132,13 @@ int BarnesHutTree::which_child(const Vector3D& position, const Node* node) const
         }
     }
 
-    return (child_number >= 0 && child_number < NSUB) ? child_number : -1;
+    return child_number;
 }
 
-void BarnesHutTree::add_leaf(Index particle_idx, Particle& particle, Node* node, int child_idx) {
-    node->type = NodeType::Internal;
-
+void BarnesHutTree::add_leaf(Particle& particle, Node* node, int child_idx) {
     // Allocate new leaf from pool
     auto* new_leaf = allocate_node();
+    new_leaf->index = current_node_index_;
     new_leaf->level = node->level + 1;
     new_leaf->particle_count = 1;
     new_leaf->particle_list.push_back(&particle);
@@ -187,54 +157,51 @@ void BarnesHutTree::add_leaf(Index particle_idx, Particle& particle, Node* node,
         }
     }
 
-    // Transfer ownership to parent
-    node->children[child_idx] = std::unique_ptr<Node>(new_leaf);
+    // The pool owns the node; the parent only observes it
+    node->children[child_idx] = new_leaf;
     new_leaf->parent = node;
 
     // Update max tree level
     max_tree_level_ = std::max(max_tree_level_, new_leaf->level);
 }
 
-void BarnesHutTree::convert_leaf_to_internal(Node* node, int child_idx) {
-    auto* old_leaf = node->children[child_idx].get();
+void BarnesHutTree::split_leaf(Node* leaf) {
+    auto moved = std::move(leaf->particle_list);
+    leaf->particle_list.clear();
+    leaf->particle_count = 0;
+    leaf->type = NodeType::Internal;
 
-    // Save particle list
-    auto temp_particle_list = std::move(old_leaf->particle_list);
-    old_leaf->particle_count = 0;
-    old_leaf->type = NodeType::Internal;
-
-    // Re-insert particles
-    for (auto* particle : temp_particle_list) {
-        const int new_child_idx = which_child(particle->position(), old_leaf);
-        insert_particle(particle->id(), *particle, old_leaf);
+    for (auto* particle : moved) {
+        insert_particle(*particle, leaf);
     }
 }
 
-void BarnesHutTree::insert_particle(Index particle_idx, Particle& particle, Node* node) {
-    const int child_idx = which_child(particle.position(), node);
-    auto& child = node->children[child_idx];
+void BarnesHutTree::insert_particle(Particle& particle, Node* node) {
+    // node is always an internal node here
+    node->particle_count++;
 
-    if (!child || child->type == NodeType::Empty) {
-        add_leaf(particle_idx, particle, node, child_idx);
-        node->particle_count++;
-        child->parent = node;
+    const int child_idx = which_child(particle.position(), node);
+    Node* child = node->children[child_idx];
+
+    if (!child) {
+        add_leaf(particle, node, child_idx);
     }
     else if (child->type == NodeType::Leaf) {
-        if (child->particle_count < max_particles_per_leaf_) {
+        // Coincident particles would otherwise be split forever: at
+        // MAX_TREE_DEPTH the leaf simply grows past its capacity.
+        if (child->particle_count < max_particles_per_leaf_ ||
+            child->level >= static_cast<Index>(MAX_TREE_DEPTH)) {
             child->particle_count++;
             child->particle_list.push_back(&particle);
-            particle.set_parent(child.get());
-            node->particle_count++;
+            particle.set_parent(child);
         }
         else {
-            convert_leaf_to_internal(node, child_idx);
-            node->particle_count++;
-            insert_particle(particle_idx, particle, child.get());
+            split_leaf(child);
+            insert_particle(particle, child);
         }
     }
-    else if (child->type == NodeType::Internal) {
-        node->particle_count++;
-        insert_particle(particle_idx, particle, child.get());
+    else {
+        insert_particle(particle, child);
     }
 }
 
@@ -267,9 +234,9 @@ void BarnesHutTree::compute_center_of_mass(Node* node) {
         Vector3D cms{0.0};
         Real total_mass = 0.0;
 
-        for (auto& child : node->children) {
+        for (auto* child : node->children) {
             if (child && child->type != NodeType::Empty) {
-                compute_center_of_mass(child.get());
+                compute_center_of_mass(child);
                 cms += child->mass * child->mass_center;
                 total_mass += child->mass;
             }
@@ -283,47 +250,52 @@ void BarnesHutTree::compute_center_of_mass(Node* node) {
 }
 
 void BarnesHutTree::calculate_forces() {
-    // Reset forces
-    for (auto& particle : particles_) {
+    const std::int64_t n = static_cast<std::int64_t>(particles_.size());
+    Index direct = 0;
+    Index particle_cell = 0;
+
+    #ifdef _OPENMP
+    #pragma omp parallel for schedule(dynamic, 64) reduction(+ : direct, particle_cell)
+    #endif
+    for (std::int64_t i = 0; i < n; ++i) {
+        auto& particle = particles_[static_cast<Index>(i)];
         particle.force() = Vector3D{0.0};
-    }
 
-    // Calculate forces for each particle
-    for (auto& particle : particles_) {
-        for (const auto& child : root_->children) {
+        InteractionCounts counts;
+        for (const auto* child : root_->children) {
             if (child && child->type != NodeType::Empty) {
-                interact(particle, child.get());
+                interact(particle, child, counts);
             }
         }
-    }
-}
-
-void BarnesHutTree::calculate_forces_parallel() {
-    // Reset forces
-    #pragma omp parallel for
-    for (Index i = 0; i < particles_.size(); ++i) {
-        particles_[i].force() = Vector3D{0.0};
+        direct += counts.direct;
+        particle_cell += counts.particle_cell;
     }
 
-    // Calculate forces in parallel
-    #pragma omp parallel for schedule(dynamic)
-    for (Index i = 0; i < particles_.size(); ++i) {
-        for (const auto& child : root_->children) {
-            if (child && child->type != NodeType::Empty) {
-                interact(particles_[i], child.get());
-            }
-        }
-    }
+    stats_.direct_force_count = direct;
+    stats_.particle_cell_interactions = particle_cell;
 }
 
 bool BarnesHutTree::is_well_separated(const Particle& particle, const Node& node) const noexcept {
+    // A cell that contains the particle is never accepted: for theta >~ 0.58
+    // (s/d >= 1/sqrt(3) inside a cube) the particle would otherwise receive a
+    // force from its own mass.
+    const Real half = 0.5 * node.size;
+    const auto& pos = particle.position();
+    bool inside = true;
+    for (int k = 0; k < NDIM; ++k) {
+        inside = inside && std::abs(pos[k] - node.geo_center[k]) <= half;
+    }
+    if (inside) {
+        return false;
+    }
+
     const Real r_squared = particle.position().squared_distance(node.mass_center);
     const Real r = std::sqrt(r_squared + EPSILON_SQUARED);
 
     return (node.size / r) <= theta_;
 }
 
-void BarnesHutTree::interact(Particle& particle, const Node* node) {
+void BarnesHutTree::interact(Particle& particle, const Node* node, InteractionCounts& counts) const {
     if (!node || node->type == NodeType::Empty) {
         return;
     }
@@ -331,28 +303,30 @@ void BarnesHutTree::interact(Particle& particle, const Node* node) {
     if (is_well_separated(particle, *node)) {
         // Use multipole approximation
         particle_cell_interaction(particle, *node);
+        counts.particle_cell++;
     }
     else {
         // Need to go deeper
         if (node->type == NodeType::Internal) {
-            for (const auto& child : node->children) {
+            for (const auto* child : node->children) {
                 if (child && child->type != NodeType::Empty) {
-                    interact(particle, child.get());
+                    interact(particle, child, counts);
                 }
             }
         }
         else if (node->type == NodeType::Leaf) {
             // Direct calculation with all particles in leaf
-            for (auto* other_particle : node->particle_list) {
-                direct_force_calculation(particle, *other_particle);
+            for (const auto* other_particle : node->particle_list) {
+                if (other_particle->id() != particle.id()) {
+                    direct_force_calculation(particle, *other_particle);
+                    counts.direct++;
+                }
             }
         }
     }
 }
 
-void BarnesHutTree::particle_cell_interaction(Particle& particle, const Node& cell) {
-    stats_.particle_cell_interactions++;
-
+void BarnesHutTree::particle_cell_interaction(Particle& particle, const Node& cell) const {
     const Real r_squared = particle.position().squared_distance(cell.mass_center);
     const Real r_cubed = (r_squared + EPSILON_SQUARED) * std::sqrt(r_squared + EPSILON_SQUARED);
     const Vector3D r_vec = particle.position() - cell.mass_center;
@@ -360,14 +334,7 @@ void BarnesHutTree::particle_cell_interaction(Particle& particle, const Node& ce
     particle.force() += -GRAVITY * particle.mass() * cell.mass / r_cubed * r_vec;
 }
 
-void BarnesHutTree::direct_force_calculation(Particle& p1, Particle& p2) {
-    // Don't calculate force with itself
-    if (p1.id() == p2.id()) {
-        return;
-    }
-
-    stats_.direct_force_count++;
-
+void BarnesHutTree::direct_force_calculation(Particle& p1, const Particle& p2) const {
     const Vector3D r_vec = p1.position() - p2.position();
     const Real r_squared = r_vec.squared_magnitude();
 
@@ -378,19 +345,30 @@ void BarnesHutTree::direct_force_calculation(Particle& p1, Particle& p2) {
     p1.force() += force;
 }
 
-void BarnesHutTree::integrate_particles() {
+void BarnesHutTree::kick_particles(Real h) {
+    const std::int64_t n = static_cast<std::int64_t>(particles_.size());
     #ifdef _OPENMP
     #pragma omp parallel for
     #endif
-    for (Index i = 0; i < particles_.size(); ++i) {
-        particles_[i].integrate(dt_);
+    for (std::int64_t i = 0; i < n; ++i) {
+        particles_[static_cast<Index>(i)].kick(h);
+    }
+}
+
+void BarnesHutTree::drift_particles(Real dt) {
+    const std::int64_t n = static_cast<std::int64_t>(particles_.size());
+    #ifdef _OPENMP
+    #pragma omp parallel for
+    #endif
+    for (std::int64_t i = 0; i < n; ++i) {
+        particles_[static_cast<Index>(i)].drift(dt);
     }
 }
 
 Node* BarnesHutTree::allocate_node() {
     if (current_node_index_ < node_pool_.size()) {
         auto* node = node_pool_[current_node_index_].get();
-        node->reset();
+        node->reset();  // Pool nodes are reused every step
         current_node_index_++;
         return node;
     }
@@ -434,7 +412,7 @@ void BarnesHutTree::display_tree(const Node* node, std::ostream& os) const {
         display_node(node, os);
         for (int i = 0; i < NSUB; ++i) {
             if (node->children[i] && node->children[i]->type != NodeType::Empty) {
-                display_tree(node->children[i].get(), os);
+                display_tree(node->children[i], os);
             }
         }
     }

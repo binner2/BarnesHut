@@ -23,6 +23,7 @@ inline constexpr int NDIM = 3;
 inline constexpr int NSUB = 1 << NDIM;
 inline constexpr double GRAVITY = 1.0;
 inline constexpr double EPSILON_SQUARED = 1e-10;  // Softening parameter for numerical stability
+inline constexpr int MAX_TREE_DEPTH = 64;          // Leaves at this depth grow past capacity (coincident particles)
 
 // Modern configuration flags
 inline constexpr bool ENABLE_TIMING = true;
@@ -51,5 +52,8 @@ public:
 private:
     TimePoint start_;
 };
+
+// Uniform random number in [min_val, max_val) (thread-local Mersenne Twister)
+double generate_random(double min_val, double max_val);
 
 } // namespace barnes_hut

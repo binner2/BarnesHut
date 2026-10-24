@@ -22,8 +22,13 @@ public:
     BarnesHutTree(BarnesHutTree&&) noexcept = default;
     BarnesHutTree& operator=(BarnesHutTree&&) noexcept = default;
 
-    // Main simulation step
+    // Main simulation step: kick-drift-kick leapfrog. The first call also
+    // computes the initial forces.
     void simulation_step();
+
+    // Rebuild the tree and compute forces at the current positions without
+    // advancing time (used for validation and initial conditions).
+    void compute_forces();
 
     // Get statistics
     struct Statistics {
@@ -40,7 +45,8 @@ public:
     [[nodiscard]] const Statistics& get_statistics() const noexcept { return stats_; }
     [[nodiscard]] std::string get_statistics_string() const;
 
-    // Clear tree for next iteration
+    // Release the current tree (nodes return to the pool). compute_forces()
+    // does this itself; calling it between steps is harmless.
     void clear_tree();
 
     // Display tree (for debugging)
@@ -50,25 +56,33 @@ private:
     // Tree construction
     void find_bounding_box(Vector3D& center, Real& size) const;
     void build_tree();
-    void insert_particle(Index particle_idx, Particle& particle, Node* node);
+    void insert_particle(Particle& particle, Node* node);
     [[nodiscard]] int which_child(const Vector3D& position, const Node* node) const noexcept;
-    void add_leaf(Index particle_idx, Particle& particle, Node* node, int child_idx);
-    void convert_leaf_to_internal(Node* node, int child_idx);
+    void add_leaf(Particle& particle, Node* node, int child_idx);
+    void split_leaf(Node* leaf);
 
     // Tree traversal
     void compute_mass_distribution();
     void compute_center_of_mass(Node* node);
 
     // Force calculation
+    // Interaction counters are accumulated per thread and reduced afterwards;
+    // writing them straight into stats_ from the OpenMP loop is a data race
+    // and serialises the threads on one cache line.
+    struct InteractionCounts {
+        Index direct = 0;
+        Index particle_cell = 0;
+    };
+
     void calculate_forces();
-    void calculate_forces_parallel();  // Parallel version
-    void interact(Particle& particle, const Node* node);
+    void interact(Particle& particle, const Node* node, InteractionCounts& counts) const;
     [[nodiscard]] bool is_well_separated(const Particle& particle, const Node& node) const noexcept;
-    void particle_cell_interaction(Particle& particle, const Node& cell);
-    void direct_force_calculation(Particle& p1, Particle& p2);
+    void particle_cell_interaction(Particle& particle, const Node& cell) const;
+    void direct_force_calculation(Particle& p1, const Particle& p2) const;
 
     // Integration
-    void integrate_particles();
+    void kick_particles(Real h);
+    void drift_particles(Real dt);
 
     // Node management
     [[nodiscard]] Node* allocate_node();
@@ -89,6 +103,7 @@ private:
 
     Statistics stats_;
     Index max_tree_level_;
+    bool forces_valid_ = false;
 };
 
 } // namespace barnes_hut

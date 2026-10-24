@@ -176,7 +176,7 @@ bool QuadtreeVisualizer::export_tree_data(
         // Export children
         for (const auto& child : node->children) {
             if (child) {
-                export_node(child.get());
+                export_node(child);
             }
         }
     };

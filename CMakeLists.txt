@@ -1,5 +1,9 @@
-cmake_minimum_required(VERSION 3.20)
-project(BarnesHutModern VERSION 2.0.0 LANGUAGES CXX CUDA)
+cmake_minimum_required(VERSION 3.24)
+project(BarnesHutModern VERSION 2.1.0 LANGUAGES CXX)
+
+option(BH_ENABLE_CUDA "Build the GPU Barnes-Hut library, tests and benchmark" ON)
+option(BH_FAST_MATH "Enable -ffast-math / -use_fast_math (breaks NaN/Inf checks in tests)" OFF)
+option(BH_CUDA_SANITIZE "Instrument device code for compute-sanitizer memcheck (-fdevice-sanitize=memcheck)" OFF)
 
 # Modern C++20 standard
 set(CMAKE_CXX_STANDARD 20)
@@ -19,14 +23,16 @@ if(MSVC)
         add_link_options(/LTCG)
     endif()
 else()
-    add_compile_options(-Wall -Wextra -pedantic)
+    # Host-compiler flags only: nvcc does not accept them directly
+    add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-Wall> $<$<COMPILE_LANGUAGE:CXX>:-Wextra> $<$<COMPILE_LANGUAGE:CXX>:-pedantic>)
     if(CMAKE_BUILD_TYPE MATCHES Release)
-        add_compile_options(-O3 -march=native -mtune=native)
-        # Enable more aggressive optimizations
-        add_compile_options(-ffast-math -funroll-loops)
+        add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-O3> $<$<COMPILE_LANGUAGE:CXX>:-march=native> $<$<COMPILE_LANGUAGE:CXX>:-funroll-loops>)
+        if(BH_FAST_MATH)
+            add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-ffast-math>)
+        endif()
     endif()
     if(CMAKE_BUILD_TYPE MATCHES Debug)
-        add_compile_options(-g -O0)
+        add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-g> $<$<COMPILE_LANGUAGE:CXX>:-O0>)
     endif()
 endif()
 
@@ -39,27 +45,47 @@ else()
     message(WARNING "OpenMP not found - using serial execution")
 endif()
 
-# CUDA configuration (CUDA 13.2+ recommended)
-enable_language(CUDA)
-find_package(CUDAToolkit REQUIRED)
-set(CMAKE_CUDA_STANDARD 20)
-set(CMAKE_CUDA_STANDARD_REQUIRED ON)
-# Support for Turing, Ampere, Ada Lovelace, Blackwell architectures
-set(CMAKE_CUDA_ARCHITECTURES 75 80 86 89 100 120)
+# CUDA configuration. The device code needs only the CUDA 13.x baseline
+# (sm_75+); CUDA 13.4 / CCCL 3.4 is the tested toolchain. CUDA stays
+# optional so the CPU code builds on machines without a toolkit.
+set(BH_HAVE_CUDA OFF)
+if(BH_ENABLE_CUDA)
+    include(CheckLanguage)
+    check_language(CUDA)
+    if(CMAKE_CUDA_COMPILER)
+        # Default fatbin: SASS for Turing..Blackwell (incl. GB10 = sm_121)
+        # plus compute_121 PTX for forward compatibility. Override with
+        # -DCMAKE_CUDA_ARCHITECTURES=native (or e.g. "89;121").
+        if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
+            set(CMAKE_CUDA_ARCHITECTURES 75-real 80-real 86-real 89-real 90-real 100-real 120-real 121-real 121-virtual)
+        endif()
+        enable_language(CUDA)
+        find_package(CUDAToolkit 13.0 REQUIRED)
+        if(CUDAToolkit_VERSION VERSION_LESS 13.4)
+            message(WARNING "CUDA ${CUDAToolkit_VERSION} found; this code is tested with CUDA 13.4 (CCCL 3.4)")
+        endif()
+        set(CMAKE_CUDA_STANDARD 20)
+        set(CMAKE_CUDA_STANDARD_REQUIRED ON)
+        set(BH_HAVE_CUDA ON)
 
-# CUDA flags
-if(CMAKE_BUILD_TYPE MATCHES Release)
-    set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -O3 -use_fast_math --expt-relaxed-constexpr --expt-extended-lambda")
-else()
-    set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -G -g -O0")
+        set(BH_CUDA_OPTIONS -lineinfo)
+        if(BH_FAST_MATH)
+            list(APPEND BH_CUDA_OPTIONS -use_fast_math)
+        endif()
+        if(BH_CUDA_SANITIZE)
+            list(APPEND BH_CUDA_OPTIONS -fdevice-sanitize=memcheck)
+        endif()
+    else()
+        message(WARNING "No CUDA compiler found - building CPU targets only")
+    endif()
 endif()
 
 # Find OpenGL and related libraries for visualization
-find_package(OpenGL REQUIRED)
+find_package(OpenGL QUIET)
 find_package(glfw3 QUIET)
 find_package(glm QUIET)
 
-if(OpenGL_FOUND AND glfw3_FOUND AND glm_FOUND)
+if(BH_HAVE_CUDA AND OpenGL_FOUND AND glfw3_FOUND AND glm_FOUND)
     set(ENABLE_VISUALIZATION ON)
     message(STATUS "OpenGL, GLFW, and GLM found - enabling visualization")
 else()
@@ -114,38 +140,40 @@ endif()
 install(TARGETS barnes_hut_sim generate_data visualize_quadtree
         RUNTIME DESTINATION bin)
 
-# CUDA 13.2 Benchmark executable
-set(CUDA13_SOURCES
-    cuda_13_2/bh_cuda_kernels.cu
-    cuda_13_2/benchmark_framework.cu
-)
+# GPU Barnes-Hut library, host-emulation tests and benchmark
+if(BH_HAVE_CUDA)
+    add_library(bh_gpu STATIC cuda/bh_gpu.cu)
+    target_include_directories(bh_gpu PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/cuda)
+    target_link_libraries(bh_gpu PUBLIC CUDA::cudart)
+    target_compile_options(bh_gpu PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:${BH_CUDA_OPTIONS}>)
 
-add_executable(benchmark_cuda13
-    cuda_13_2/test_scenarios.cpp
-    ${CUDA13_SOURCES}
-    ${CORE_SOURCES}
-)
+    # Runs the device algorithm on the host: no GPU needed
+    add_executable(bh_host_core_test cuda/tests/host_core_test.cu)
+    target_include_directories(bh_host_core_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/cuda)
 
-target_include_directories(benchmark_cuda13 PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/cuda_13_2
-)
+    add_executable(benchmark_cuda
+        cuda/test_scenarios.cpp
+        cuda/benchmark_framework.cu
+        ${CORE_SOURCES}
+    )
+    target_include_directories(benchmark_cuda PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/cuda
+    )
+    target_compile_options(benchmark_cuda PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:${BH_CUDA_OPTIONS}>)
+    target_link_libraries(benchmark_cuda PRIVATE bh_gpu)
+    if(OpenMP_CXX_FOUND)
+        target_link_libraries(benchmark_cuda PRIVATE OpenMP::OpenMP_CXX)
+        target_compile_options(benchmark_cuda PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=${OpenMP_CXX_FLAGS}>)
+    endif()
 
-target_link_libraries(benchmark_cuda13 PRIVATE
-    CUDA::cudart
-    CUDA::cuda_driver
-)
+    install(TARGETS benchmark_cuda RUNTIME DESTINATION bin)
 
-if(OpenMP_CXX_FOUND)
-    target_link_libraries(benchmark_cuda13 PRIVATE OpenMP::OpenMP_CXX)
+    enable_testing()
+    add_test(NAME host_core COMMAND bh_host_core_test)
+    # CPU tests always run; GPU tests are skipped when no device is present
+    add_test(NAME correctness COMMAND benchmark_cuda --correctness-only)
 endif()
-
-set_target_properties(benchmark_cuda13 PROPERTIES
-    CUDA_SEPARABLE_COMPILATION ON
-    CUDA_RESOLVE_DEVICE_SYMBOLS ON
-)
-
-install(TARGETS benchmark_cuda13 RUNTIME DESTINATION bin)
 
 # Visualization executable with CUDA and OpenGL
 if(ENABLE_VISUALIZATION)
@@ -207,12 +235,11 @@ message(STATUS "")
 message(STATUS "=== Barnes-Hut Configuration ===")
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
 message(STATUS "C++ Standard: ${CMAKE_CXX_STANDARD}")
-message(STATUS "CUDA Standard: ${CMAKE_CUDA_STANDARD}")
 message(STATUS "Compiler: ${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION}")
 message(STATUS "OpenMP: ${OpenMP_CXX_FOUND}")
-message(STATUS "CUDA: ${CUDAToolkit_FOUND} (${CUDAToolkit_VERSION})")
+message(STATUS "CUDA: ${BH_HAVE_CUDA} (${CUDAToolkit_VERSION})")
 message(STATUS "CUDA Architectures: ${CMAKE_CUDA_ARCHITECTURES}")
 message(STATUS "Visualization: ${ENABLE_VISUALIZATION}")
-message(STATUS "Benchmark: ON (benchmark_cuda13)")
+message(STATUS "GPU benchmark/tests: ${BH_HAVE_CUDA} (benchmark_cuda, bh_host_core_test)")
 message(STATUS "=================================")
 message(STATUS "")

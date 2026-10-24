@@ -1,5 +1,8 @@
 # CUDA 13.2 Özelliklerinin Barnes-Hut N-Body Simülasyonuna Uygulanması
 
+> **Tarihsel belge (M0).** Bu rapordaki hızlanma oranları ölçüm değil, tahmindir. Raporun anlattığı özelliklerin (cub Segmented Reduce, Tile kernel, CUDA Graphs) hiçbiri M0 kodunda çalışan bir yolda kullanılmıyordu. "GPU_BH" benchmark'ı aslında direct-sum çalıştırıyordu. CUDA Tile'ın CC 8.x'te desteklendiği iddiası **[DOĞRULANMADI]**. Güncel durum, denetim ve kabul ölçütleri için bkz. [`CUDA_13_4_MODERNIZATION.md`](CUDA_13_4_MODERNIZATION.md).
+
+
 ## Kapsamlı Analiz Raporu
 
 **Proje:** Barnes-Hut N-Body Simülasyonu (C++20 / CUDA)

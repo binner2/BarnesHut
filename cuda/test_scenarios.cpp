@@ -1,5 +1,5 @@
 /**
- * Test Scenarios for Barnes-Hut CUDA 13.2 Integration
+ * Test Scenarios for the Barnes-Hut CPU octree and GPU LBVH implementations
  *
  * Comprehensive test suite covering:
  * 1. Correctness validation (CPU reference vs GPU)
@@ -9,7 +9,9 @@
  * 5. Edge cases
  *
  * Usage:
- *   ./benchmark_cuda13 [--quick | --full | --distribution-only | --correctness-only]
+ *   ./benchmark_cuda [--quick | --full | --distribution-only | --correctness-only]
+ *
+ * GPU tests are skipped (and reported as such) when no CUDA device exists.
  */
 
 #include "benchmark_framework.cuh"
@@ -21,6 +23,9 @@
 #include <cmath>
 #include <cassert>
 #include <iomanip>
+#include <chrono>
+#include <cstdlib>
+#include <sstream>
 
 using namespace barnes_hut::benchmark;
 
@@ -151,11 +156,9 @@ void test_cpu_correctness() {
         auto px0 = px, py0 = py, pz0 = pz;
         auto vx0 = vx, vy0 = vy, vz0 = vz;
 
-        // Run Barnes-Hut
-        benchmark_cpu_serial(mass.data(), px.data(), py.data(), pz.data(),
-                             vx.data(), vy.data(), vz.data(),
-                             fx_bh.data(), fy_bh.data(), fz_bh.data(),
-                             N, config, 1);
+        // Barnes-Hut forces at the initial state
+        cpu_bh_forces(mass.data(), px.data(), py.data(), pz.data(), N, config,
+                      fx_bh.data(), fy_bh.data(), fz_bh.data());
 
         // Compute direct N-body reference
         px = px0; py = py0; pz = pz0; vx = vx0; vy = vy0; vz = vz0;
@@ -190,8 +193,8 @@ void test_cpu_correctness() {
 
         std::string name = distribution_name(dist);
         TEST_ASSERT(result.passed,
-            name + ": BH vs Direct max_rel_err=" +
-            std::to_string(result.max_relative_error));
+            name + ": BH vs Direct L2 err=" +
+            std::to_string(result.l2_norm_error));
 
         std::cout << "    " << name << ": L2 norm error = " << result.l2_norm_error
                   << ", max relative error = " << result.max_relative_error << "\n";
@@ -222,8 +225,8 @@ void test_force_validation() {
         config.theta = 0.0f;  // Force exact
         config.max_particles_per_leaf = 1;
 
-        benchmark_cpu_serial(mass, px, py, pz, vx, vy, vz, fx, fy, fz,
-                             N, config, 1);
+        cpu_bh_forces(mass, px, py, pz, N, config, fx, fy, fz);
+        (void)vx; (void)vy; (void)vz;
 
         // Expected: F = -G * m1 * m2 / r^2 * r_hat
         // r = 10, G = 1.0, m1 = 1000, m2 = 2000
@@ -352,11 +355,11 @@ void test_scaling_analysis() {
             mass.data(), px.data(), py.data(), pz.data(),
             vx.data(), vy.data(), vz.data(),
             fx.data(), fy.data(), fz.data(),
-            N, config, config.warmup_steps + config.measured_steps);
+            N, config, config.measured_steps, config.warmup_steps);
 
         double nlogn = N * std::log2(static_cast<double>(N));
         double ratio = (prev_nlogn > 0) ?
-            (timing.total.mean_ms / prev_time) / (nlogn / prev_nlogn) : 1.0;
+            (timing.total.median_ms / prev_time) / (nlogn / prev_nlogn) : 1.0;
 
         std::string complexity;
         if (ratio > 0.8 && ratio < 1.3) complexity = "~ O(N log N)";
@@ -366,13 +369,13 @@ void test_scaling_analysis() {
 
         std::cout << std::left
                   << std::setw(10) << N
-                  << std::setw(15) << std::fixed << std::setprecision(2) << timing.total.mean_ms
+                  << std::setw(15) << std::fixed << std::setprecision(2) << timing.total.median_ms
                   << std::setw(15) << std::setprecision(0) << nlogn
                   << std::setw(15) << std::setprecision(3) << ratio
                   << std::setw(15) << complexity
                   << "\n";
 
-        prev_time = timing.total.mean_ms;
+        prev_time = timing.total.median_ms;
         prev_nlogn = nlogn;
     }
 
@@ -490,80 +493,68 @@ void test_distribution_impact() {
 void test_gpu_correctness() {
     std::cout << "\n=== Test 8: GPU vs CPU Dogruluk Karsilastirmasi ===\n\n";
 
-    int device_count = 0;
-    cudaGetDeviceCount(&device_count);
-    if (device_count == 0) {
-        std::cout << "  GPU bulunamadı — test atlanıyor\n";
-        TEST_ASSERT(true, "GPU testi atlandı (GPU yok)");
+    if (!gpu_available()) {
+        std::cout << "  [SKIP] GPU bulunamadi - GPU dogruluk testleri calistirilmadi\n";
         return;
     }
 
-    const size_t N = 1000;
-    std::vector<float> mass(N), px(N), py(N), pz(N);
-    std::vector<float> vx(N), vy(N), vz(N);
-    std::vector<float> cpu_fx(N), cpu_fy(N), cpu_fz(N);
-    std::vector<float> gpu_fx(N), gpu_fy(N), gpu_fz(N);
+    const size_t N = 4000;
+    std::vector<float> mass(N), px(N), py(N), pz(N), vx(N), vy(N), vz(N);
+    std::vector<float> ref_fx(N), ref_fy(N), ref_fz(N);
+    std::vector<float> fx(N), fy(N), fz(N);
+    std::vector<size_t> all(N);
+    for (size_t i = 0; i < N; ++i) all[i] = i;
 
     BenchmarkConfig config;
     config.theta = 0.5f;
     config.dt = 0.001f;
 
-    for (auto dist : {Distribution::Uniform, Distribution::Plummer}) {
-        generate_distribution(dist, N,
-            mass.data(), px.data(), py.data(), pz.data(),
-            vx.data(), vy.data(), vz.data(), 42);
+    for (auto dist : {Distribution::Uniform, Distribution::Plummer, Distribution::Clustered}) {
+        const std::string name = distribution_name(dist);
+        generate_distribution(dist, N, mass.data(), px.data(), py.data(), pz.data(),
+                              vx.data(), vy.data(), vz.data(), 42);
+        reference_forces_direct(mass.data(), px.data(), py.data(), pz.data(), N,
+                                config.epsilon_squared, config.gravity, all,
+                                ref_fx.data(), ref_fy.data(), ref_fz.data());
 
-        auto px0 = px, py0 = py, pz0 = pz;
-        auto vx0 = vx, vy0 = vy, vz0 = vz;
+        try {
+            // GPU direct (float) must match the double reference closely
+            auto qx = px, qy = py, qz = pz, wx = vx, wy = vy, wz = vz;
+            benchmark_gpu_direct(mass.data(), qx.data(), qy.data(), qz.data(), wx.data(), wy.data(),
+                                 wz.data(), fx.data(), fy.data(), fz.data(), N, config, 1);
+            auto direct = validate_forces(ref_fx.data(), ref_fy.data(), ref_fz.data(),
+                                          fx.data(), fy.data(), fz.data(), N, 1e-4f);
+            TEST_ASSERT(direct.passed, "GPU direct vs double direct (" + name + "): L2=" +
+                                       std::to_string(direct.l2_norm_error));
 
-        // CPU reference (direct O(N^2))
-        float eps_sq = config.epsilon_squared;
-        float G = config.gravity;
-        for (size_t i = 0; i < N; ++i) cpu_fx[i] = cpu_fy[i] = cpu_fz[i] = 0;
-        for (size_t i = 0; i < N; ++i) {
-            for (size_t j = 0; j < N; ++j) {
-                if (i == j) continue;
-                float dx = px0[i] - px0[j];
-                float dy = py0[i] - py0[j];
-                float dz = pz0[i] - pz0[j];
-                float r_sq = dx*dx + dy*dy + dz*dz + eps_sq;
-                float r_inv = 1.0f / std::sqrt(r_sq);
-                float r_inv3 = r_inv * r_inv * r_inv;
-                float f = -G * mass[i] * mass[j] * r_inv3;
-                cpu_fx[i] += f * dx;
-                cpu_fy[i] += f * dy;
-                cpu_fz[i] += f * dz;
+            // GPU Barnes-Hut at theta = 0.5
+            gpu_bh_forces(mass.data(), px.data(), py.data(), pz.data(), N, config,
+                          fx.data(), fy.data(), fz.data());
+            auto bh = validate_forces(ref_fx.data(), ref_fy.data(), ref_fz.data(),
+                                      fx.data(), fy.data(), fz.data(), N, config.max_l2_error);
+            TEST_ASSERT(bh.passed, "GPU BH vs double direct (" + name + "): L2=" +
+                                   std::to_string(bh.l2_norm_error));
+
+            // Graph replay must reproduce the eager trajectory bit for bit
+            // (the pipeline is deterministic: stable sort, fixed child order)
+            std::vector<float> ex = px, ey = py, ez = pz, evx = vx, evy = vy, evz = vz;
+            std::vector<float> gx = px, gy = py, gz = pz, gvx = vx, gvy = vy, gvz = vz;
+            benchmark_gpu_bh(mass.data(), ex.data(), ey.data(), ez.data(), evx.data(), evy.data(),
+                             evz.data(), fx.data(), fy.data(), fz.data(), N, config, 10, 0, false);
+            benchmark_gpu_bh(mass.data(), gx.data(), gy.data(), gz.data(), gvx.data(), gvy.data(),
+                             gvz.data(), fx.data(), fy.data(), fz.data(), N, config, 10, 0, true);
+            bool identical = true;
+            for (size_t i = 0; i < N; ++i) {
+                identical = identical && ex[i] == gx[i] && ey[i] == gy[i] && ez[i] == gz[i] &&
+                            evx[i] == gvx[i] && evy[i] == gvy[i] && evz[i] == gvz[i];
             }
+            TEST_ASSERT(identical, "CUDA Graph replay == eager launches, 10 steps (" + name + ")");
+
+            std::cout << "    " << name << ": direct L2=" << direct.l2_norm_error
+                      << "  BH L2=" << bh.l2_norm_error << "\n";
+        } catch (const std::exception& e) {
+            TEST_ASSERT(false, "GPU calisti (" + name + "): " + e.what());
         }
-
-        // GPU direct
-        px = px0; py = py0; pz = pz0; vx = vx0; vy = vy0; vz = vz0;
-        benchmark_gpu_direct(mass.data(), px.data(), py.data(), pz.data(),
-                             vx.data(), vy.data(), vz.data(),
-                             gpu_fx.data(), gpu_fy.data(), gpu_fz.data(),
-                             N, config, 1);
-
-        // Check for CUDA kernel launch errors
-        cudaError_t cuda_err = cudaGetLastError();
-        if (cuda_err != cudaSuccess) {
-            std::cerr << "  CUDA kernel error: " << cudaGetErrorString(cuda_err) << "\n";
-            TEST_ASSERT(false, "GPU kernel basarılı calıstı (" + std::string(distribution_name(dist)) + ")");
-            continue;
-        }
-
-        auto result = validate_forces(
-            cpu_fx.data(), cpu_fy.data(), cpu_fz.data(),
-            gpu_fx.data(), gpu_fy.data(), gpu_fz.data(),
-            N, 0.01f
-        );
-
-        std::string name = distribution_name(dist);
-        TEST_ASSERT(result.passed,
-            "GPU vs CPU (" + name + "): max_err=" +
-            std::to_string(result.max_relative_error));
-
-        std::cout << "    " << name << ": L2=" << result.l2_norm_error
-                  << " max_rel=" << result.max_relative_error << "\n";
     }
 }
 
@@ -627,25 +618,24 @@ void test_theta_sensitivity() {
         config.warmup_steps = 0;
         config.measured_steps = 1;
 
-        auto timing = benchmark_cpu_serial(
-            mass.data(), px.data(), py.data(), pz.data(),
-            vx.data(), vy.data(), vz.data(),
-            fx.data(), fy.data(), fz.data(),
-            N, config, 1);
+        const auto t0 = std::chrono::steady_clock::now();
+        cpu_bh_forces(mass.data(), px.data(), py.data(), pz.data(), N, config,
+                      fx.data(), fy.data(), fz.data());
+        const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
 
         auto correctness = validate_forces(
             ref_fx.data(), ref_fy.data(), ref_fz.data(),
             fx.data(), fy.data(), fz.data(), N, 1.0f);
 
         std::string accuracy;
-        if (correctness.max_relative_error < 0.01) accuracy = "Mukemmel";
-        else if (correctness.max_relative_error < 0.05) accuracy = "Iyi";
-        else if (correctness.max_relative_error < 0.15) accuracy = "Orta";
+        if (correctness.l2_norm_error < 0.001) accuracy = "Mukemmel";
+        else if (correctness.l2_norm_error < 0.01) accuracy = "Iyi";
+        else if (correctness.l2_norm_error < 0.05) accuracy = "Orta";
         else accuracy = "Dusuk";
 
         std::cout << std::left
                   << std::setw(10) << std::fixed << std::setprecision(1) << theta
-                  << std::setw(15) << std::setprecision(2) << timing.total.mean_ms
+                  << std::setw(15) << std::setprecision(2) << ms
                   << std::setw(15) << std::scientific << std::setprecision(3) << correctness.max_relative_error
                   << std::setw(15) << correctness.l2_norm_error
                   << std::setw(10) << accuracy
@@ -727,21 +717,48 @@ void test_edge_cases() {
 
 int main(int argc, char* argv[]) {
     std::cout << "================================================================\n"
-              << "  Barnes-Hut CUDA 13.2 Test Suite\n"
+              << "  Barnes-Hut Test Suite (CPU octree + GPU LBVH)\n"
               << "  Sistematik CPU vs GPU Karsilastirma\n"
               << "  Duzenli ve Duzensiz Dagılım Testleri\n"
               << "================================================================\n";
 
-    bool run_all = true;
     bool quick_mode = false;
     bool distribution_only = false;
     bool correctness_only = false;
+    bool benchmark_mode = false;
+    BenchmarkConfig bench;
 
     for (int i = 1; i < argc; ++i) {
+        const bool has_value = i + 1 < argc;
         if (strcmp(argv[i], "--quick") == 0) quick_mode = true;
-        else if (strcmp(argv[i], "--full") == 0) run_all = true;
+        else if (strcmp(argv[i], "--full") == 0) { /* default */ }
         else if (strcmp(argv[i], "--distribution-only") == 0) distribution_only = true;
         else if (strcmp(argv[i], "--correctness-only") == 0) correctness_only = true;
+        else if (strcmp(argv[i], "--benchmark") == 0) benchmark_mode = true;
+        else if (strcmp(argv[i], "--warmup") == 0 && has_value) bench.warmup_steps = std::atoi(argv[++i]);
+        else if (strcmp(argv[i], "--steps") == 0 && has_value) bench.measured_steps = std::atoi(argv[++i]);
+        else if (strcmp(argv[i], "--theta") == 0 && has_value) bench.theta = static_cast<float>(std::atof(argv[++i]));
+        else if (strcmp(argv[i], "--csv") == 0 && has_value) bench.output_csv = argv[++i];
+        else if (strcmp(argv[i], "--n") == 0 && has_value) {
+            bench.particle_counts.clear();
+            std::stringstream list(argv[++i]);
+            for (std::string item; std::getline(list, item, ',');) {
+                bench.particle_counts.push_back(static_cast<size_t>(std::stoull(item)));
+            }
+        } else {
+            std::cerr << "Unknown or incomplete option: " << argv[i] << "\n"
+                      << "Usage: " << argv[0] << " [--quick | --full | --distribution-only | --correctness-only]\n"
+                      << "       " << argv[0] << " --benchmark [--warmup W] [--steps K] [--theta T] [--n 1000,10000] [--csv file]\n";
+            return 2;
+        }
+    }
+
+    if (benchmark_mode) {
+        const auto results = run_benchmark_suite(bench);
+        print_results_table(results);
+        print_distribution_analysis(results);
+        write_results_csv(results, bench.output_csv);
+        return 0;
     }
 
     if (correctness_only) {
@@ -749,6 +766,7 @@ int main(int argc, char* argv[]) {
         test_cpu_correctness();
         test_force_validation();
         test_numerical_stability();
+        test_gpu_correctness();
         test_edge_cases();
     } else if (distribution_only) {
         test_distribution_impact();

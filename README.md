@@ -214,6 +214,18 @@ g++ -o generate_data generate_data.cpp -O2
 
 ---
 
+### GPU Sürümü (CUDA 13.4)
+
+`cuda/` dizini, tamamen GPU üzerinde çalışan bir Barnes–Hut hattı içerir. Hat şu adımlardan oluşur: Morton sıralaması, Karras binary radix tree, `atomic_ref` ile bottom-up refit, stack'li traversal ve KDK leapfrog. İsteğe bağlı CUDA Graph replay desteği vardır.
+
+```bash
+cmake -S . -B build && cmake --build build -j
+ctest --test-dir build --output-on-failure      # GPU gerektirmeyen host-emülasyon testleri dahil
+build/benchmark_cuda --benchmark --warmup 50 --steps 100 --n 10000,100000
+```
+
+Denetim, ölçüm protokolü ve kabul ölçütleri: [`CUDA_13_4_MODERNIZATION.md`](CUDA_13_4_MODERNIZATION.md).
+
 ## 🚀 Kullanım
 
 ### Adım 1: Test Verisi Oluşturma

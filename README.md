@@ -221,7 +221,8 @@ g++ -o generate_data generate_data.cpp -O2
 ```bash
 cmake -S . -B build && cmake --build build -j
 ctest --test-dir build --output-on-failure      # GPU gerektirmeyen host-emülasyon testleri dahil
-build/benchmark_cuda --benchmark --warmup 50 --steps 100 --n 10000,100000
+build/benchmark_cuda --benchmark --warmup 50 --steps 100 --n 10000,100000   # GPU θ varsayılanı 0.3: CPU θ=0.5 ile eşleşmiş doğruluk
+build/bh_theta_calibration 8000 0.5             # başka bir θ için GPU θ eşleştirmesi (GPU gerektirmez)
 ```
 
 Denetim, ölçüm protokolü ve kabul ölçütleri: [`CUDA_13_4_MODERNIZATION.md`](CUDA_13_4_MODERNIZATION.md).

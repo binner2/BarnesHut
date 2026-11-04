@@ -336,7 +336,7 @@ StepBreakdown benchmark_cpu(
 
 gpu::GpuConfig to_gpu_config(const BenchmarkConfig& config, bool use_graph) {
     gpu::GpuConfig g;
-    g.theta = config.theta;
+    g.theta = config.gpu_theta > 0.0f ? config.gpu_theta : config.theta;
     g.epsilon_squared = config.epsilon_squared;
     g.gravity = config.gravity;
     g.dt = config.dt;
@@ -589,7 +589,10 @@ BenchmarkResult make_result(const std::string& method, Distribution dist, size_t
     r.timing = timing;
     r.correctness = correctness;
     const double t = std::max(timing.total.median_ms, 1e-6);
-    r.speedup_vs_serial = serial_median > 0.0 ? serial_median / t : 1.0;
+    // serial_median < 0: the measured quantity is not a full step (GPU_Direct
+    // times force evaluations only), so a ratio to CPU step time is undefined
+    r.speedup_vs_serial = serial_median > 0.0 ? serial_median / t
+                        : serial_median < 0.0 ? std::numeric_limits<double>::quiet_NaN() : 1.0;
     r.particles_per_second = static_cast<double>(n) / (t / 1000.0);
     r.gflops = 0.0;
     return r;
@@ -599,7 +602,9 @@ void print_row(const BenchmarkResult& r) {
     std::cout << "    " << std::left << std::setw(16) << r.method_name << std::right << std::fixed
               << std::setprecision(3) << std::setw(10) << r.timing.total.median_ms << " ms  [IQR "
               << (r.timing.total.p75_ms - r.timing.total.p25_ms) << "]  "
-              << std::setprecision(2) << std::setw(8) << r.speedup_vs_serial << "x  L2err "
+              << std::setprecision(2) << std::setw(8)
+              << (std::isnan(r.speedup_vs_serial) ? std::string("n/a") : std::to_string(r.speedup_vs_serial).substr(0, 6))
+              << "x  L2err "
               << std::scientific << std::setprecision(2) << r.correctness.l2_norm_error
               << (r.correctness.passed ? "" : "  [ACCURACY FAIL]") << std::fixed << "\n";
 }
@@ -613,7 +618,10 @@ std::vector<BenchmarkResult> run_benchmark_suite(const BenchmarkConfig& config) 
               << "================================================================\n"
               << "  Barnes-Hut Benchmark Suite (CPU octree vs GPU LBVH)\n"
               << "  warmup=" << config.warmup_steps << " measured=" << config.measured_steps
-              << " theta=" << config.theta << " dt=" << config.dt << "\n"
+              << " theta(CPU)=" << config.theta
+              << " theta(GPU)=" << (config.gpu_theta > 0.0f ? config.gpu_theta : config.theta)
+              << " dt=" << config.dt << "\n"
+              << "  Compare speed only at matched L2 error (see --gpu-theta)\n"
               << "================================================================\n\n";
 
     const bool has_gpu = gpu_available();
@@ -709,7 +717,7 @@ std::vector<BenchmarkResult> run_benchmark_suite(const BenchmarkConfig& config) 
                                                          config.measured_steps, config.warmup_steps);
                 all_results.push_back(make_result("GPU_Direct", dist, N, direct,
                                                   compare_subset(idx, rfx, rfy, rfz, fx, fy, fz, 1e-4f),
-                                                  serial_median));
+                                                  -1.0));
                 print_row(all_results.back());
 
                 // GPU Barnes-Hut accuracy: forces computed by the constructor

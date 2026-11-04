@@ -64,7 +64,14 @@ struct BenchmarkConfig {
     };
 
     // Simulation parameters
-    float theta = 0.5f;
+    float theta = 0.5f;          // CPU octree opening parameter (cube edge / distance)
+    // GPU LBVH opening parameter (longest tight-box edge / distance); <= 0
+    // means "same as theta". The criteria are not equivalent: at equal theta
+    // the GPU tree is ~3-4x less accurate. Default 0.3 matches the global L2
+    // error of CPU theta = 0.5 (2.7e-3..4.1e-3 vs 2.4e-3..3.7e-3, N = 8000,
+    // uniform/clustered/Plummer/disk, host emulation). Recalibrate if theta
+    // changes: speed is only comparable at matched accuracy.
+    float gpu_theta = 0.3f;
     float dt = 0.001f;
     float epsilon_squared = 1e-10f;
     float gravity = 1.0f;
@@ -74,7 +81,7 @@ struct BenchmarkConfig {
     int warmup_steps = 10;      // Warmup iterations (not timed)
     int measured_steps = 30;    // Timed iterations, one sample each
     bool validate_correctness = true;  // Compare forces against a direct sum
-    float max_l2_error = 2e-2f;        // Barnes-Hut: ||F - F_ref|| / ||F_ref||
+    float max_l2_error = 1e-2f;        // Barnes-Hut: ||F - F_ref|| / ||F_ref||
     size_t validation_sample = 4096;   // Particles checked against the reference
 
     // Output
@@ -125,7 +132,7 @@ struct BenchmarkResult {
     CorrectnessResult correctness;
 
     // Derived metrics
-    double speedup_vs_serial = 0;     // Median-time speedup over CPU serial
+    double speedup_vs_serial = 0;     // Median step-time speedup over CPU serial (NaN: not comparable)
     double gflops = 0;                // Not estimated (kept for CSV compatibility)
     double particles_per_second = 0;  // Throughput
 };

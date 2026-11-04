@@ -30,7 +30,7 @@ K: kritik (sonuç veya iddia yanlış) · O: optimizasyon · M: ölçüm/derleme
 | K3 | `CORE_SOURCES` | `file.cpp` (`generate_random` bildirimi yok) ve `BHtreetest.cpp` (`omp.h` yok) derlenmiyor | `benchmark_cuda13` hedefi M0'da **hiç link edilemiyordu** | Düzeltildi |
 | K4 | `integrate_kernel`, `Particle::integrate` | "KDK leapfrog" iki yarım kick'te de aynı \(a(x_n)\)'yi kullanıyor: hız için birinci mertebe Euler | İki-cisim yörüngesinde 20 000 adımda \(\lvert\Delta E/E\rvert\) = 0.58 | Düzeltildi: 1e-8 (CPU, double), 2e-5 (GPU çekirdeği, float) |
 | K5 | `force_kernel_tiled` | Stack taştığında node'lar **sessizce atlanıyor** | Hatalı kuvvet, hata bildirimi yok | Yeni kernel'de taşma monopole ile ele alınıyor ve sayılıyor (`stack_overflows`) |
-| K6 | Kabul kriteri (CPU ve GPU) | Parçacığı içeren hücre kabul edilebiliyor | θ ≳ 0.58'de self-force | Düzeltildi (inside-box testi) |
+| K6 | Kabul kriteri (CPU ve GPU) | Parçacığı içeren hücre kabul edilebiliyor | Teorik olarak θ ≳ 0.58'de self-force mümkün. Uniform testte hiç tetiklenmedi (etkileşim sayıları değişmedi); etkisi parçacığın hücre kütlesine oranıyla sınırlı ve küçük | Düzeltildi (inside-box testi) |
 | K7 | `benchmark_cpu_serial` | Hızlar geri kopyalanmıyor | Enerji testi sabit kinetik enerjiyle ölçüyordu | Düzeltildi |
 | K8 | `run_benchmark_suite` | Doğruluk, K adım sonra *farklı* yörüngelerdeki kuvvetlerle ve BH (yaklaşık) referansla ölçülüyor | Doğruluk sütunu anlamsız | Ortak başlangıç durumunda double direct-sum'a karşı ölçülüyor |
 | K9 | `--correctness-only` | `test_gpu_correctness` bu modda hiç çağrılmıyor | GPU doğruluğu CI'da test edilmiyordu | Düzeltildi |
@@ -49,8 +49,8 @@ Kaynak: CUDA 13.4 / 13.4 Update 1 release notes. Sürüm numaraları kurulu tool
 
 | 13.4 öğesi | Projede nereye | Karar |
 |---|---|---|
-| CCCL 3.4: Thrust iterator'ları `cuda::` eşdeğerleri lehine deprecated | Bbox girişinde `cuda::counting_iterator` + `cuda::make_transform_iterator`. Ara dizi oluşmuyor. | **UYGULANDI** |
-| CCCL 3.4: tüm device algoritmaları için tek çağrılı, environment tabanlı overload'lar (`EnvT env = {}`) | Header'da mevcut (`device_radix_sort.cuh`) | **UYGULANMADI.** Graph capture için geçici bellek önceden ve sabit boyutta ayrılmalı, bu yüzden two-phase API bilinçli olarak korundu |
+| CCCL 3.4: Thrust *constant* ve *strided* iterator'ları `cuda::` eşdeğerleri lehine deprecated (counting/transform iterator'ları için böyle bir not yok) | Bbox girişinde `cuda::counting_iterator` + `cuda::make_transform_iterator`. Ara dizi oluşmuyor. Bu bir deprecation zorunluluğu değil, tercih | **UYGULANDI** |
+| CCCL 3.4: tüm device algoritmaları için tek çağrılı, environment tabanlı overload'lar (`EnvT env = {}`) | Header'da mevcut (`device_radix_sort.cuh`) | **UYGULANMADI.** Tercih nedeni: geçici bellek bir kez ve sabit boyutta ayrılınca her adımda allocation olmaz ve capture edilen graph'ta bellek node'u bulunmaz. Bu bir zorunluluk değil: stream-ordered allocation da capture edilebilir. env-overload'ları ile karşılaştırma GPU'da yapılmalı |
 | CCCL 3.4: `cuda::std` parallel algoritmaları (`cuda::execution::gpu`) | Gather/bbox için aday | Ertelendi (runtime davranışı GPU'da ölçülmeden alınmadı) |
 | CCCL 3.4: `cub::WarpReduceBatched` | Uygun bir iş yükü yok | UYGULANMADI |
 | `-fdevice-sanitize=memcheck` (nvcc 13.4 `--help` ile doğrulandı) | `-DBH_CUDA_SANITIZE=ON` build seçeneği | **UYGULANDI** (derleme doğrulandı; çalıştırma [GPU'da doğrulanmadı]) |
@@ -62,7 +62,7 @@ Kaynak: CUDA 13.4 / 13.4 Update 1 release notes. Sürüm numaraları kurulu tool
 | MPS v3, Compute Fabric Transport, `cudaMemGetLocationInfo` | Tek GPU, tek süreç | Kapsam dışı |
 | Sürücü: yeni özellikler için R615; 13.x minor-version uyumluluğu için ≥ 580; Linux'ta sürücü artık toolkit ile gelmiyor | Kod 13.4'e özgü bir runtime API'si kullanmıyor, ≥ 580 yeterli olmalı | [GPU'da doğrulanmadı] |
 
-Kernel'lerin kullandığı hiçbir özellik 13.4'e özgü değildir: `cuda::atomic_ref` (libcu++), CUB, stream capture ve CUDA Graphs uzun süredir mevcuttur. Bu nedenle kod ve makale metninde "CUDA 13.4 özellikleri" ifadesi kullanılmamalıdır. Doğru ifade şudur: "CUDA 13.4 araç zinciri (nvcc 13.4.92, CCCL 3.4) ile derlenmiş, mimariye özgü özellik kullanmayan SIMT kodu".
+Kernel'lerin kullandığı hiçbir özellik 13.4'e özgü değildir. Dolayısıyla bu çalışmanın asıl değeri 13.4'e geçişte değil, M0'daki doğruluk hatalarının giderilmesinde ve gerçek bir GPU Barnes–Hut yolunun yazılmasında. 13.4 burada yalnızca sabitlenmiş araç zinciridir. Kullanılan öğeler: `cuda::atomic_ref` (libcu++), CUB, stream capture ve CUDA Graphs uzun süredir mevcuttur. Bu nedenle kod ve makale metninde "CUDA 13.4 özellikleri" ifadesi kullanılmamalıdır. Doğru ifade şudur: "CUDA 13.4 araç zinciri (nvcc 13.4.92, CCCL 3.4) ile derlenmiş, mimariye özgü özellik kullanmayan SIMT kodu".
 
 ## 4. Yeni GPU hattı
 
@@ -91,7 +91,7 @@ Host emülasyonunda (N = 4000, ε² = 1e-4), aynı maliyette (parçacık başın
 
 ### Ağaç yapısının doğrulanması (host emülasyonu)
 
-4 dağılım × N ∈ {2, 3, 17, 1000, 50 000} için şunlar kontrol edildi: her node'a tam bir kez ulaşılıyor, parent/child tutarlı, kök kütlesi ve kütle merkezi double referansla eşleşiyor, her kutu çocuklarının kutularını kapsıyor. Ölçülen en büyük derinlik 33 (Plummer, N = 50 000); stack = 64.
+4 dağılım × N ∈ {2, 3, 17, 1000, 50 000} için şunlar kontrol edildi: her node'a tam bir kez ulaşılıyor, parent/child tutarlı, kök kütlesi ve kütle merkezi double referansla eşleşiyor, her kutu çocuklarının kutularını kapsıyor. Ölçülen en büyük derinlik 33 (Plummer, N = 50 000); stack = 64. Yeniden değerlendirmede N = 1M / 4M için ölçülen derinlikler: uniform 25/28, Plummer 38/40, clustered 34/36, coincident 38/42. Stack payı korunuyor; ancak kozmolojik ölçekte çok yoğun kümelenmede (gerçek veriyle) yeniden ölçülmeli.
 
 ### Kuvvet doğruluğu (host emülasyonu, N = 4000, float)
 
@@ -102,6 +102,17 @@ Host emülasyonunda (N = 4000, ε² = 1e-4), aynı maliyette (parçacık başın
 | Clustered | 3.3e-6 / 3.5e-5 | 9.5e-3 / 6.7e-2 | 2.1e-2 / 1.5e-1 |
 
 Not: θ'nın anlamı CPU octree'den farklıdır (küp kenarı yerine sıkı kutunun en uzun kenarı; binary ağaç). CPU ve GPU sonuçlarını aynı θ'da değil, aynı doğrulukta karşılaştırın.
+
+### θ kalibrasyonu (yeniden değerlendirme, global L2, N = 8000, benchmark dağılımları)
+
+| Dağılım | CPU θ = 0.5 | GPU θ = 0.30 | GPU θ = 0.35 | GPU θ = 0.5 |
+|---|---|---|---|---|
+| Uniform | 2.71e-3 | 2.42e-3 | 3.55e-3 | 1.13e-2 |
+| Clustered | 3.30e-3 | 3.29e-3 | 4.84e-3 | 1.13e-2 |
+| Plummer | 3.17e-3 | 2.52e-3 | 3.95e-3 | 9.80e-3 |
+| Disk | 4.06e-3 | 3.66e-3 | 5.61e-3 | 1.50e-2 |
+
+İlk sürümdeki benchmark iki yöntemi aynı θ = 0.5 ile çalıştırıyordu. Bu durumda GPU, CPU'dan 3–4 kat daha kötü doğrulukta ölçülüyordu ve hızlanma oranı şişiyordu. Düzeltme: `BenchmarkConfig::gpu_theta` (varsayılan 0.3, CPU θ = 0.5 ile eşleşmiş; başka bir θ için `build/bh_theta_calibration [N] [cpu_theta]` ile, GPU gerektirmeden yeniden kalibre edin), `--gpu-theta` CLI seçeneği ve geçme eşiği 2e-2 yerine 1e-2.
 
 ## 5. Derleme
 
@@ -137,7 +148,8 @@ CMake değişiklikleri:
 - **Warmup:** ölçülmeyen adımlar (`--warmup`). **Ölçüm:** her adım ayrı bir örnek (`--steps`). Raporlanan değer medyan ve IQR (Q3 − Q1). Kanonik protokol: `--warmup 50 --steps 100`.
 - **Zamanlama:** GPU'da CUDA event'leri; eager modda faz kırılımıyla (tree / force / integrate), graph modunda yalnızca toplam süre. CPU'da `steady_clock`.
 - **Doğruluk:** ortak başlangıç durumundaki kuvvetler, double direct-sum'a karşı. Geçme ölçütü global bağıl L2 hatası \(\lVert F-F_{ref}\rVert/\lVert F_{ref}\rVert\). Parçacık başına maksimum hata raporlanır ama ölçüt olarak kullanılmaz, çünkü net kuvveti sıfıra yakın parçacıklar bu değeri domine eder.
-- **Kapsam:** `GPU_Direct` yalnızca kuvvet değerlendirmesini ölçer. `GPU_BH` ve `GPU_BH_Graph` tam KDK adımını ölçer. Bu ikisi birbirine bölünerek karşılaştırılmamalıdır.
+- **Kapsam:** `GPU_Direct` yalnızca kuvvet değerlendirmesini ölçer. `GPU_BH` ve `GPU_BH_Graph` tam KDK adımını ölçer. Bu ikisi birbirine bölünerek karşılaştırılmamalıdır. Bu yüzden `GPU_Direct` için CPU'ya göre hızlanma `n/a` olarak raporlanır (ilk sürümde adım süresine bölünüyordu).
+- **Eşleşmiş doğruluk:** hız karşılaştırması yalnızca L2 hatası eşleşmiş θ çiftleriyle yapılır (bkz. §4, θ kalibrasyonu).
 - **ncu:** `--clock-control base --cache-control all`. Traversal'daki stall nedenlerini (bağımlı yükler, divergence) PM sampling ile ayırın.
 
 ## 7. Fazlar ve kabul ölçütleri
@@ -146,7 +158,7 @@ CMake değişiklikleri:
 |---|---|---|---|
 | **M0** | `0fbd396` (orijinal CUDA branch) | — (referans) | Benchmark link edilemiyor; GPU BH = direct |
 | **M1** | CPU düzeltmeleri, CMake, benchmark protokolü | ASan temiz; θ = 0'da CPU = direct (1e-15); OpenMP ölçekleniyor; enerji sınırlı | **Sağlandı** (bu ortamda) |
-| **M2** | GPU LBVH Barnes–Hut (eager) | Host emülasyonunda 72/72; GPU'da `--correctness-only` geçer; GPU direct L2 < 1e-4; GPU BH L2 < 2e-2 (θ = 0.5) | Host: **sağlandı**. GPU: [GPU'da doğrulanmadı] |
+| **M2** | GPU LBVH Barnes–Hut (eager) | Host emülasyonunda 72/72; GPU'da `--correctness-only` geçer; GPU direct L2 < 1e-4; GPU BH L2 < 1e-2 (`gpu_theta` = 0.3) | Host: **sağlandı**. GPU: [GPU'da doğrulanmadı] |
 | **M3** | CUDA Graph replay | 10 adım sonunda eager ile bit-bit aynı konum/hız (test mevcut); küçük N'de toplam süre azalır | [GPU'da doğrulanmadı] |
 | M4 (öneri) | Warp-coherent traversal veya yaprak bucket'ları (≥ 8 parçacık/yaprak), stack'in shared memory'ye taşınması | M2 ile aynı doğruluk; ncu'da force kernel süresi düşer | Yapılmadı |
 | M5 (öneri) | Quadrupole momentleri | Aynı doğruluk için daha büyük θ, daha az etkileşim | Yapılmadı |

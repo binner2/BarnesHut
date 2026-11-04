@@ -527,7 +527,7 @@ void test_gpu_correctness() {
             TEST_ASSERT(direct.passed, "GPU direct vs double direct (" + name + "): L2=" +
                                        std::to_string(direct.l2_norm_error));
 
-            // GPU Barnes-Hut at theta = 0.5
+            // GPU Barnes-Hut at config.gpu_theta (accuracy-matched to CPU theta 0.5)
             gpu_bh_forces(mass.data(), px.data(), py.data(), pz.data(), N, config,
                           fx.data(), fy.data(), fz.data());
             auto bh = validate_forces(ref_fx.data(), ref_fy.data(), ref_fz.data(),
@@ -738,6 +738,7 @@ int main(int argc, char* argv[]) {
         else if (strcmp(argv[i], "--warmup") == 0 && has_value) bench.warmup_steps = std::atoi(argv[++i]);
         else if (strcmp(argv[i], "--steps") == 0 && has_value) bench.measured_steps = std::atoi(argv[++i]);
         else if (strcmp(argv[i], "--theta") == 0 && has_value) bench.theta = static_cast<float>(std::atof(argv[++i]));
+        else if (strcmp(argv[i], "--gpu-theta") == 0 && has_value) bench.gpu_theta = static_cast<float>(std::atof(argv[++i]));
         else if (strcmp(argv[i], "--csv") == 0 && has_value) bench.output_csv = argv[++i];
         else if (strcmp(argv[i], "--n") == 0 && has_value) {
             bench.particle_counts.clear();
@@ -748,7 +749,7 @@ int main(int argc, char* argv[]) {
         } else {
             std::cerr << "Unknown or incomplete option: " << argv[i] << "\n"
                       << "Usage: " << argv[0] << " [--quick | --full | --distribution-only | --correctness-only]\n"
-                      << "       " << argv[0] << " --benchmark [--warmup W] [--steps K] [--theta T] [--n 1000,10000] [--csv file]\n";
+                      << "       " << argv[0] << " --benchmark [--warmup W] [--steps K] [--theta T] [--gpu-theta T] [--n 1000,10000] [--csv file]\n";
             return 2;
         }
     }

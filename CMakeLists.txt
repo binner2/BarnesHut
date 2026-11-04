@@ -169,6 +169,15 @@ if(BH_HAVE_CUDA)
 
     install(TARGETS benchmark_cuda RUNTIME DESTINATION bin)
 
+    # Host-only: GPU theta that matches the CPU theta in force accuracy
+    add_executable(bh_theta_calibration cuda/tests/theta_calibration.cu cuda/benchmark_framework.cu ${CORE_SOURCES})
+    target_include_directories(bh_theta_calibration PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/cuda)
+    target_link_libraries(bh_theta_calibration PRIVATE bh_gpu)
+    if(OpenMP_CXX_FOUND)
+        target_link_libraries(bh_theta_calibration PRIVATE OpenMP::OpenMP_CXX)
+        target_compile_options(bh_theta_calibration PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=${OpenMP_CXX_FLAGS}>)
+    endif()
+
     enable_testing()
     add_test(NAME host_core COMMAND bh_host_core_test)
     # CPU tests always run; GPU tests are skipped when no device is present

@@ -3,6 +3,13 @@
 [![C++](https://img.shields.io/badge/Language-C++-blue.svg)](https://isocpp.org/)
 [![Algorithm](https://img.shields.io/badge/Algorithm-Barnes--Hut-green.svg)](https://en.wikipedia.org/wiki/Barnes%E2%80%93Hut_simulation)
 
+> **Yeni (2026-11): Derinlik kamerası nokta bulutu pipeline'ı.** Barnes-Hut
+> octree'si artık Kinect/RealSense tarzı derinlik görüntülerinden üretilen
+> nokta bulutları üzerinde kernel yoğunluk kestirimi, mean-shift bölütleme ve
+> WLOP yeniden örnekleme için kullanılabiliyor. Ayrıntılar ve komutlar için
+> [`pointcloud/README.md`](pointcloud/README.md). CUDA/OpenGL görselleştirici
+> artık isteğe bağlıdır (`-DBH_ENABLE_VISUALIZATION=ON`).
+
 ## 📋 İçindekiler
 
 - [Proje Hakkında](#proje-hakkında)

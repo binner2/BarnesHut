@@ -36,6 +36,9 @@ using Index = std::size_t;
 using TimePoint = std::chrono::high_resolution_clock::time_point;
 using Duration = std::chrono::duration<double>;
 
+// Uniform random number in [min_val, max_val) (defined in stdinc.cpp)
+double generate_random(double min_val, double max_val);
+
 // High-precision timer class
 class Timer {
 public:

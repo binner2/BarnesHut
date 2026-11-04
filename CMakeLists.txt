@@ -1,5 +1,12 @@
 cmake_minimum_required(VERSION 3.20)
-project(BarnesHutModern VERSION 2.0.0 LANGUAGES CXX CUDA)
+project(BarnesHutModern VERSION 2.1.0 LANGUAGES CXX)
+
+# Optional components. The core simulation, the point-cloud pipeline and the
+# tests build with a plain C++20 compiler; CUDA/OpenGL are only needed for the
+# interactive visualiser.
+option(BH_ENABLE_VISUALIZATION "Build the CUDA/OpenGL visualiser (needs CUDA toolkit, GLFW, GLM)" OFF)
+option(BH_BUILD_POINTCLOUD "Build the depth-camera point-cloud pipeline" ON)
+option(BH_BUILD_TESTS "Build and register tests" ON)
 
 # Modern C++20 standard
 set(CMAKE_CXX_STANDARD 20)
@@ -39,39 +46,34 @@ else()
     message(WARNING "OpenMP not found - using serial execution")
 endif()
 
-# CUDA configuration
-enable_language(CUDA)
-find_package(CUDAToolkit REQUIRED)
-set(CMAKE_CUDA_STANDARD 17)
-set(CMAKE_CUDA_STANDARD_REQUIRED ON)
-set(CMAKE_CUDA_ARCHITECTURES 75 80 86 89)  # Support for Turing, Ampere, Ada Lovelace
-
-# CUDA flags
-if(CMAKE_BUILD_TYPE MATCHES Release)
-    set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -O3 -use_fast_math --expt-relaxed-constexpr")
-else()
-    set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -G -g -O0")
-endif()
-
-# Find OpenGL and related libraries for visualization
-find_package(OpenGL REQUIRED)
-find_package(glfw3 QUIET)
-find_package(glm QUIET)
-
-if(OpenGL_FOUND AND glfw3_FOUND AND glm_FOUND)
-    set(ENABLE_VISUALIZATION ON)
-    message(STATUS "OpenGL, GLFW, and GLM found - enabling visualization")
-else()
-    set(ENABLE_VISUALIZATION OFF)
-    message(WARNING "Visualization dependencies not found - building without visualization")
-    if(NOT OpenGL_FOUND)
-        message(WARNING "  OpenGL not found")
+# CUDA + OpenGL configuration (visualiser only)
+set(ENABLE_VISUALIZATION OFF)
+if(BH_ENABLE_VISUALIZATION)
+    enable_language(CUDA)
+    find_package(CUDAToolkit REQUIRED)
+    set(CMAKE_CUDA_STANDARD 17)
+    set(CMAKE_CUDA_STANDARD_REQUIRED ON)
+    set(CMAKE_CUDA_ARCHITECTURES 75 80 86 89)  # Turing, Ampere, Ada Lovelace
+    if(CMAKE_BUILD_TYPE MATCHES Release)
+        set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -O3 -use_fast_math --expt-relaxed-constexpr")
+    else()
+        set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -G -g -O0")
     endif()
-    if(NOT glfw3_FOUND)
-        message(WARNING "  GLFW3 not found - install with: sudo apt-get install libglfw3-dev")
-    endif()
-    if(NOT glm_FOUND)
-        message(WARNING "  GLM not found - install with: sudo apt-get install libglm-dev")
+
+    find_package(OpenGL REQUIRED)
+    find_package(glfw3 QUIET)
+    find_package(glm QUIET)
+    if(OpenGL_FOUND AND glfw3_FOUND AND glm_FOUND)
+        set(ENABLE_VISUALIZATION ON)
+        message(STATUS "OpenGL, GLFW, and GLM found - enabling visualization")
+    else()
+        message(WARNING "Visualization dependencies not found - building without visualization")
+        if(NOT glfw3_FOUND)
+            message(WARNING "  GLFW3 not found - install with: sudo apt-get install libglfw3-dev")
+        endif()
+        if(NOT glm_FOUND)
+            message(WARNING "  GLM not found - install with: sudo apt-get install libglm-dev")
+        endif()
     endif()
 endif()
 
@@ -112,6 +114,14 @@ endif()
 # Installation
 install(TARGETS barnes_hut_sim generate_data visualize_quadtree
         RUNTIME DESTINATION bin)
+
+# Depth-camera point-cloud pipeline
+if(BH_BUILD_TESTS)
+    enable_testing()
+endif()
+if(BH_BUILD_POINTCLOUD)
+    add_subdirectory(pointcloud)
+endif()
 
 # Visualization executable with CUDA and OpenGL
 if(ENABLE_VISUALIZATION)
@@ -173,10 +183,9 @@ message(STATUS "")
 message(STATUS "=== Barnes-Hut Configuration ===")
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
 message(STATUS "C++ Standard: ${CMAKE_CXX_STANDARD}")
-message(STATUS "CUDA Standard: ${CMAKE_CUDA_STANDARD}")
 message(STATUS "Compiler: ${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION}")
 message(STATUS "OpenMP: ${OpenMP_CXX_FOUND}")
-message(STATUS "CUDA: ${CUDAToolkit_FOUND} (${CUDAToolkit_VERSION})")
-message(STATUS "Visualization: ${ENABLE_VISUALIZATION}")
+message(STATUS "Visualization (CUDA/OpenGL): ${ENABLE_VISUALIZATION}")
+message(STATUS "Point-cloud pipeline: ${BH_BUILD_POINTCLOUD}")
 message(STATUS "=================================")
 message(STATUS "")

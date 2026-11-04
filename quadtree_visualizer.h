@@ -59,8 +59,9 @@ public:
         int projection = 0;                // 0=XY, 1=XZ, 2=YZ
     };
 
-    QuadtreeVisualizer(const Config& config = Config{})
-        : config_(config), colors_(ColorScheme{}) {}
+    QuadtreeVisualizer() : config_(), colors_() {}
+    explicit QuadtreeVisualizer(const Config& config)
+        : config_(config), colors_() {}
 
     // Main visualization function
     bool visualize_tree(
@@ -247,7 +248,7 @@ private:
                     if (clustered[j]) continue;
 
                     const auto& p2 = particles[j];
-                    const double dist = (p1.position() - p2.position()).length();
+                    const double dist = (p1.position() - p2.position()).magnitude();
 
                     if (dist < config_.cluster_threshold) {
                         cluster_members.push_back(j);

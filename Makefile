@@ -19,10 +19,21 @@ endif
 CORE_SOURCES := stdinc.cpp particle.cpp tree.cpp file.cpp
 CORE_OBJECTS := $(CORE_SOURCES:.cpp=.o)
 
-# Targets
-TARGETS := barnes_hut_sim generate_data
+# Point-cloud pipeline (pointcloud/)
+PC_DIR := pointcloud
+PC_SOURCES := $(PC_DIR)/point_cloud.cpp $(PC_DIR)/point_octree.cpp $(PC_DIR)/algorithms.cpp $(PC_DIR)/synthetic.cpp
+PC_OBJECTS := $(PC_SOURCES:.cpp=.o)
+PNG_CFLAGS := $(shell pkg-config --cflags libpng 2>/dev/null)
+PNG_LIBS := $(shell pkg-config --libs libpng 2>/dev/null)
+ifneq ($(PNG_LIBS),)
+    $(info libpng detected - PNG depth input enabled)
+    CXXFLAGS += -DBH_HAVE_PNG=1 $(PNG_CFLAGS)
+endif
 
-.PHONY: all clean release debug install
+# Targets
+TARGETS := barnes_hut_sim generate_data pointcloud_tool test_pointcloud
+
+.PHONY: all clean release debug install test
 
 # Default: Release build
 all: release
@@ -45,6 +56,19 @@ generate_data: generate_data.o $(CORE_OBJECTS)
 	$(CXX) $(CXXFLAGS) -o $@ $^
 	@echo "Built: $@"
 
+# Point-cloud tool
+pointcloud_tool: $(PC_DIR)/pointcloud_tool.o $(PC_OBJECTS) stdinc.o
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(PNG_LIBS)
+	@echo "Built: $@"
+
+# Point-cloud tests
+test_pointcloud: $(PC_DIR)/tests/test_pointcloud.o $(PC_OBJECTS) stdinc.o
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(PNG_LIBS)
+	@echo "Built: $@"
+
+test: test_pointcloud
+	./test_pointcloud
+
 # Object files
 %.o: %.cpp
 	$(CXX) $(CXXFLAGS) -c -o $@ $<
@@ -65,7 +89,7 @@ install: release
 
 # Clean
 clean:
-	rm -f *.o $(TARGETS)
+	rm -f *.o $(PC_DIR)/*.o $(PC_DIR)/tests/*.o $(TARGETS)
 	@echo "Cleaned build artifacts"
 
 # Help
@@ -77,6 +101,7 @@ help:
 	@echo "  make debug        - Build debug version"
 	@echo "  make clean        - Remove build artifacts"
 	@echo "  make install      - Install to ~/bin"
+	@echo "  make test         - Build and run point-cloud tests"
 	@echo ""
 	@echo "OpenMP: $(if $(OPENMP),Enabled,Disabled)"
 	@echo "Compiler: $(CXX)"

@@ -16,6 +16,11 @@
 #include <string>
 #include <vector>
 #include <memory>
+#include <sstream>
+
+#ifdef _OPENMP
+#include <omp.h>
+#endif
 
 using namespace barnes_hut;
 

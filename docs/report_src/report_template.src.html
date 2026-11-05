@@ -1,0 +1,280 @@
+<title>Barnes-Hut Nokta Bulutu</title>
+<style>
+.grid4{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.6rem}
+.grid4 img{width:100%;height:auto;display:block;border-radius:4px}
+.grid4 figcaption-like{font-size:.85em}
+.panel-lab{font-family:var(--mono,monospace);font-size:.8em;opacity:.8;margin:.2rem 0 0}
+@media (max-width:640px){.grid4{grid-template-columns:1fr}}
+</style>
+
+<header class="hero">
+  <div class="eyebrow">Teknik rapor ve araştırma planı · 4 Kasım 2026 · sürüm 1.0</div>
+  <h1>Barnes-Hut Octree ile Derinlik Kamerası Nokta Bulutu İşleme</h1>
+  <p class="lead">Repodaki 2004 kökenli Barnes-Hut N-body simülatörü, derinlik kamerası nokta bulutları için çalışan bir işleme hattına dönüştürüldü. Temel gözlem, kütle-çekim kuvvet toplamı ile kernel yoğunluk kestirimi, mean shift ve WLOP yeniden örnekleme arasındaki cebirsel eşdeğerliktir: üçü de \(\sum_j w_j K(q,p_j)\) biçimindedir ve octree'nin uzak hücrelerini tek bir ağırlıklı merkezle temsil eden Barnes-Hut yaklaşımı hepsine uygulanır. Sentetik bir 640×480 karede {{nmax}} nokta için kesin Gauss KDE {{exact_time_nmax}} s sürerken, \(\theta=0{,}5\) ve \(4h\) kesmesiyle Barnes-Hut toplamı {{kde_time_t05_k00}} s'de ({{kde_speedup_t05_k00}} kat) göreli RMS hatayı {{kde_rms_t05_k00}} düzeyinde tutar. Geometrik açılma ölçütünün Gauss çekirdeği için hatayı kontrol etmediği gösterildi; buna karşılık önerilen çekirdek-bilinçli ölçüt (\(\kappa\)) ve yaprak kapasitesi, akademik çalışmanın ilk özgün ekseni olarak öne çıkar.</p>
+  <ol class="findings">
+    <li><span><b>Repo, nokta bulutu için doğrudan kullanılamıyordu; şimdi kullanılabiliyor.</b> Mevcut ağaç parçacık simülasyonuna sıkı bağlıydı ve kod derlenmiyordu; indeks tabanlı yeni bir octree, derinlik görüntüsü geri izdüşümü, PLY/PCD/XYZ/PNG okuma, üç Barnes-Hut algoritması, CLI ve testler eklendi.</span></li>
+    <li><span><b>Barnes-Hut, kernel toplamlarını N² yerine N log N'e indiriyor; hata θ ile değil çekirdek ölçeğiyle kontrol ediliyor.</b> Ölçümlerde \(\theta\) küçültmek hatayı azaltır ama maliyeti hızla kesin toplama yaklaştırır; \(\kappa h\) genişlik sınırı ve yaprak kapasitesi, hata–süre Pareto sınırını belirleyen asıl parametrelerdir.</span></li>
+    <li><span><b>Dört yayınlanabilir çalışma ekseni tanımlandı.</b> Çekirdek-bilinçli açılma ölçütü, 1/z² örnekleme yanlılığını gideren BH-WLOP yeniden örnekleme, konum–normal uzayında BH mean shift bölütleme ve GPU'ya taşınabilir lineer octree ile gerçek zamanlı işleme; her biri için araştırma sorusu, taban çizgisi, veri kümesi ve ölçüt verildi.</span></li>
+  </ol>
+  <dl class="kunye">
+    <div><dt>Kapsam</dt><dd><code>binner2/BarnesHut</code> deposu, dal <code>claude/sweet-faraday-fyldry</code>; yeni <code>pointcloud/</code> modülü</dd></div>
+    <div><dt>Yöntem</dt><dd>Kod incelemesi, C++20 uygulama, 6 doğrulama testi, sentetik derinlik sahnesinde θ/κ/N/yaprak taraması (4 iş parçacığı, GCC 13.3, -O3)</dd></div>
+    <div><dt>Veri</dt><dd>Işın izlemeli sentetik iç mekân sahnesi (fx=fy=525, 640×480, \(\sigma_z=0{,}0019\,z^2\) m gürültü, %2 düşen piksel); gerçek kamera verisi bu oturumda yok</dd></div>
+    <div><dt>Kaynak doğrulama</dt><dd>Künyeler scite <em>verify_papers</em> ile 4 Kasım 2026'da doğrulandı; eşleşmeyenler DOĞRULANMADI olarak işaretli</dd></div>
+  </dl>
+</header>
+
+<h2 id="s-repo">Reponun mevcut durumu</h2>
+<p>Depo, Mart 2017'de yüklenen ve 2004–2005 tarihli yorumlar taşıyan bir Barnes-Hut N-body simülatörünün 2025'te C++20'ye taşınmış hâlidir. Çekirdek, <code>tree.cpp</code> içindeki <code>BarnesHutTree</code> sınıfıdır: parçacıkları octree'ye yerleştirir, kütle merkezlerini aşağıdan yukarıya hesaplar, her parçacık için ağaçta inerek \(s/d \lt \theta\) sağlayan hücreleri tek kütle gibi işler ve leapfrog ile zamanı ilerletir. Bu, Barnes ve Hut'un 1986'da tanımladığı hiyerarşik \(O(N\log N)\) kuvvet algoritmasının doğrudan uygulamasıdır [@barnes1986]. Kütle merkezi (monopol) yaklaşımı, Greengard ve Rokhlin'in çok kutuplu açılımlarla \(O(N)\)'e inen hızlı çok kutup yönteminin en düşük mertebeli özel hâlidir [@greengard1987].</p>
+<p>Kodun nokta bulutu için doğrudan kullanılamamasının üç nedeni vardı. Birincisi, ağaç düğümleri <code>std::unique_ptr</code> çocuklar ve <code>std::vector&lt;Particle*&gt;</code> listeleriyle parçacık sınıfına bağlıydı; kuvvet, kütle ve hız kavramları olmayan bir nokta kümesi için fazlalık ve GPU'ya taşınamaz yapıydı (depodaki <code>ANALYSIS_DATA_STRUCTURES.md</code> bu sorunu zaten saptamıştı). İkincisi, sınır kutusu <code>std::ceil(size)+1</code> ile tam sayıya yuvarlanıyordu; metre biriminde 3 m'lik bir sahne için kabul edilebilir, milimetre ya da normalize birimlerde ağaç derinliğini bozan bir seçimdir. Üçüncüsü, depo derlenmiyordu: <code>generate_random</code> başlıkta bildirilmemişti, <code>BHtreetest.cpp</code> <code>omp.h</code> eklemeden <code>omp_get_num_threads</code> çağırıyordu, <code>quadtree_visualizer.h</code> iç içe yapı için geçersiz varsayılan argüman ve var olmayan <code>Vector3D::length()</code> kullanıyordu ve <code>CMakeLists.txt</code> CUDA araç zincirini zorunlu kılıyordu. Bu dört hata düzeltildi; CUDA/OpenGL görselleştirici isteğe bağlı hâle getirildi. <a class="xref" href="#tbl-repo"></a>, bileşen bazında yeniden kullanılabilirlik değerlendirmesini verir.</p>
+<figure class="tbl" id="tbl-repo"><figcaption>Reponun bileşenleri, nokta bulutu için yeniden kullanılabilirlik değerlendirmesi ve bu çalışmada yapılan müdahale. Kaynak: kod incelemesi, 4 Kasım 2026.</figcaption>
+<div class="scroll"><table>
+<thead><tr><th>Bileşen</th><th>İçerik</th><th>Nokta bulutu için durum</th><th>Müdahale</th></tr></thead>
+<tbody>
+<tr><td><code>vektor.h</code></td><td>constexpr 3-D vektör, 32 bayt hizalı</td><td class="ok">Doğrudan yeniden kullanıldı</td><td>Yok</td></tr>
+<tr><td><code>tree.h/.cpp</code></td><td>İşaretçi tabanlı octree, kuvvet hesabı, leapfrog</td><td class="mid">Fikir alındı, kod alınmadı</td><td>Oktant kodlaması ve açılma ölçütü korunarak indeks tabanlı <code>PointOctree</code> yazıldı</td></tr>
+<tr><td><code>particle.h</code></td><td>Kütle, hız, kuvvet alanlı parçacık</td><td class="bad">Uygun değil</td><td>SoA <code>PointCloud</code> (nokta, normal, renk, skaler)</td></tr>
+<tr><td><code>file.cpp</code></td><td>Özel metin biçimi, snapshot yazımı</td><td class="bad">Uygun değil</td><td>PLY (ascii/binary), PCD, XYZ, 16-bit PNG/PGM/raw okuyucular</td></tr>
+<tr><td><code>stdinc.h</code></td><td>Zamanlayıcı, sabitler</td><td class="ok">Yeniden kullanıldı</td><td>Eksik bildirim eklendi</td></tr>
+<tr><td><code>visualization/</code></td><td>CUDA + OpenGL parçacık görselleştirici</td><td class="mid">Gelecek GPU çalışması için örnek</td><td>CMake'te isteğe bağlı yapıldı</td></tr>
+<tr><td>Gnuplot/SVG betikleri</td><td>Simülasyon snapshot görselleştirme</td><td class="mid">Dolaylı</td><td>Çıktılar PLY olduğundan CloudCompare/MeshLab önerildi</td></tr>
+</tbody></table></div></figure>
+<p class="key">Depodan taşınan asıl değer kod değil, algoritmik fikirdir: uzak hücreleri ağırlıklı merkezle temsil eden hiyerarşik yaklaşım, nokta bulutu üzerindeki bütün kernel toplamlarına uygulanabilir.</p>
+
+<h2 id="s-form">Neden Barnes-Hut: N-body ile kernel toplamlarının eşdeğerliği</h2>
+<p>Gray ve Moore, istatistiksel öğrenmedeki kernel yoğunluk kestirimi, en yakın komşu ve benzeri hesapların hepsinin "N-body problemi" biçiminde olduğunu ve uzay bölümleme ağaçlarıyla hızlandırılabileceğini öne sürmüştür <span class="badge warn">DOĞRULANMADI</span> [@gray2001]; van der Maaten'in Barnes-Hut t-SNE'si bu fikrin en yaygın bilinen uygulamasıdır <span class="badge warn">DOĞRULANMADI</span> [@vandermaaten2014]. Bir derinlik kamerası karesinden gelen \(N\) nokta \(p_j\in\mathbb{R}^3\) için ilgilenilen bütün büyüklükler şu biçimdedir:</p>
+<div class="eq" id="eq-kernel-sum">$$S(q)=\sum_{j=1}^{N} w_j\,K\!\left(q,p_j\right)$$</div>
+<dl class="symbols"><dt>\(q\)</dt><dd>sorgu noktası [m]</dd><dt>\(p_j\)</dt><dd>bulut noktası [m]</dd><dt>\(w_j\)</dt><dd>nokta ağırlığı (yoğunluk düzeltmesi, kütle); birimsiz</dd><dt>\(K\)</dt><dd>çekirdek: Gauss, \(1/r\), \(1/r^3\)…</dd></dl>
+<p>Kütle çekimi için \(K=-G m_q (q-p_j)/|q-p_j|^3\) ve \(w_j=m_j\) alınır; Gauss KDE için \(K=\exp(-|q-p_j|^2/2h^2)\) ve \(w_j=1\). Barnes-Hut, noktaları bir octree'ye yerleştirir ve her düğüm \(n\) için toplam ağırlık \(W_n=\sum_{j\in n}w_j\) ile ağırlıklı merkez \(c_n=\sum_{j\in n}w_j p_j/W_n\) saklar. Sorgu \(q\) için ağaçta kökten inilir; bir düğüm, genişliği \(s_n\) ve merkez uzaklığı \(d_n=|q-c_n|\) olmak üzere</p>
+<div class="eq" id="eq-bh">$$\frac{s_n}{d_n}\lt\theta\;\Longrightarrow\;\sum_{j\in n}w_jK(q,p_j)\approx W_n\,K(q,c_n)$$</div>
+<p>koşulunu sağlıyorsa tek terimle kapatılır, sağlamıyorsa çocuklarına inilir. Düğüm başına sabit iş ve açılan düğüm sayısının \(O(\log N)\) olmasıyla sorgu başına maliyet \(O(\log N)\), bütün noktalar için \(O(N\log N)\) olur [@barnes1986]. Salmon ve Warren, yalnızca \(s/d\) ölçütünün belirli nokta dağılımlarında hatayı sınırlamadığını göstermiş ve açılma ölçütüne hücre merkezi–kütle merkezi kaymasını ekleyen türevler önermiştir [@salmon1994]; Barnes'ın kendi değişikliği ise hücre–hücre etkileşimleriyle maliyeti düşürür [@barnes1990]. Bu çalışmadaki uygulamanın özgün noktası, aynı ölçüt sorununun Gauss çekirdeği için nasıl ortaya çıktığını ölçmek ve çekirdek ölçeğine bağlı bir ek koşul önermektir (<a class="xref" href="#s-hata"></a>).</p>
+<aside class="side">Gauss çekirdeği için literatürdeki asıl hızlandırıcılar hızlı Gauss dönüşümü [@greengard1991] ve geliştirilmiş biçimi IFGT'dir [@yang2003]; bunlar Hermite açılımı kullanır ve yüksek boyutta güçlüdür. Üç boyutta ve değişken bant genişliğinde octree tabanlı monopol yaklaşımı daha basit, veri yapısı diğer işlemlerle (komşu arama, voxel) ortaktır; karşılaştırma, önerilen çalışmanın bir parçasıdır.</aside>
+
+<h2 id="s-problem">Derinlik kamerası verisinin özellikleri</h2>
+<p>Bir derinlik kamerası, her piksel için ham tamsayı derinlik \(D(u,v)\) üretir; metreye çevrim \(z=D/s\) ile yapılır (\(s=1000\) milimetre tabanlı sensörler, \(s=5000\) TUM RGB-D PNG dosyaları [@tum2012; @tumformats]). Pinhole modelinde piksel \((u,v)\) şu üç boyutlu noktaya geri izdüşürülür:</p>
+<div class="eq" id="eq-pinhole">$$p(u,v)=\begin{pmatrix}(u-c_x)\,z/f_x\\ (v-c_y)\,z/f_y\\ z\end{pmatrix},\qquad z=\frac{D(u,v)}{s},\; D\neq 0$$</div>
+<dl class="symbols"><dt>\(f_x,f_y\)</dt><dd>odak uzaklığı [piksel]</dd><dt>\(c_x,c_y\)</dt><dd>ana nokta [piksel]</dd><dt>\(s\)</dt><dd>ham birim/metre ölçeği</dd><dt>\(D=0\)</dt><dd>geçersiz ölçüm</dd></dl>
+<p>Bu geometri, nokta bulutunun yoğunluğunu derinliğe sıkı biçimde bağlar. Fronto-paralel bir yüzeyde bir pikselin ayak izi \((z/f_x)(z/f_y)\) m²'dir; yüzey normali bakış doğrultusuyla \(\alpha\) açısı yapıyorsa ayak izi \(1/\cos\alpha\) kadar büyür. Birim alana düşen nokta sayısı dolayısıyla</p>
+<div class="eq" id="eq-density-area">$$\rho_A(z,\alpha)=\frac{f_x f_y\cos\alpha}{z^{2}}\quad[\text{nokta/m}^2]$$</div>
+<p>olur. 1 m'deki bir yüzey 3 m'dekinden dokuz kat sık örneklenir; zemin gibi sığ açıyla görülen yüzeyler seyrek kalır. Bu yanlılık, derinlik verisinde KDE, mean shift ve yeniden örneklemenin neden ağırlık ve bant genişliği seçimine duyarlı olduğunu açıklar ve <a class="xref" href="#fig-scene"></a>'deki yoğunluk panelinde doğrudan görülür. Yapılandırılmış ışık sensörlerinde derinlik hatası da uzaklıkla karesel büyür; Khoshelham ve Elberink, Kinect için rastgele derinlik hatasının 1 m'de birkaç milimetreden 5 m'de 4 cm'ye çıktığını ölçmüştür [@khoshelham2012]. Sentetik sahnede bu model</p>
+<div class="eq" id="eq-noise">$$\tilde z = z + c\,z^{2}\,\varepsilon,\qquad \varepsilon\sim\mathcal N(0,1),\quad c=0{,}0019\ \text{m}^{-1}$$</div>
+<p>ile uygulanır ve ardından ham birime nicemlenir; \(c\) değeri 1 m'de 1,9 mm, 3 m'de 1,7 cm standart sapma verir. Stereo tabanlı RealSense ailesinde hata modeli farklıdır [@keselman2017]; gerçek veriyle çalışırken sensöre özgü model kullanılmalıdır.</p>
+
+<h2 id="s-yontem">Yöntem: octree ve üç Barnes-Hut algoritması</h2>
+<h3>İndeks tabanlı octree</h3>
+<p>Yeni <code>PointOctree</code>, düğümleri tek bir bitişik <code>std::vector&lt;OctreeNode&gt;</code> içinde tutar; çocuklar 32-bit indekslerdir ve her düğüm permüte edilmiş bir indeks dizisinde \([b,e)\) aralığına sahiptir, böylece yaprak da iç düğüm de kendi noktalarını sıralı bellekten sayar. İnşa, her seviyede oktanta göre sayma sıralamasıyla \(O(N\log N)\) sürede yapılır; yaprak kapasitesi, azami derinlik (çakışık noktalar için güvence) ve asgari hücre boyutu parametreleridir. Bu yerleşim, Elseberg ve arkadaşlarının milyar noktalı lazer taramaları için önerdiği bellek-sıkı octree ile aynı ailedendir [@elseberg2013] ve Karras'ın paralel BVH/octree inşasına [@karras2012] ya da Burtscher ve Pingali'nin CUDA Barnes-Hut uygulamasına [@burtscher2011] taşınabilecek biçimdedir. Aynı ağaç yarıçap araması, \(k\) en yakın komşu (en-iyi-önce kuyruk) ve Barnes-Hut gezintisi sağlar; Behley ve arkadaşlarının yarıçap aramaları için gösterdiği gibi octree, bu sorgu türünde k-d ağacıyla [@bentley1975] rekabet eder [@behley2015]. <a class="xref" href="#fig-pipeline"></a>, bu ağacın hattaki yerini gösterir.</p>
+<figure class="fig wide" id="fig-pipeline">
+<svg viewBox="0 0 860 300" role="img" aria-label="Derinlik görüntüsünden Barnes-Hut algoritmalarına işleme hattı: geri izdüşüm, octree, klasik ön işleme ve üç kernel toplamı" style="max-width:100%;height:auto">
+<title>İşleme hattı</title>
+<defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker></defs>
+<rect class="box" x="10" y="110" width="130" height="64" rx="6"/>
+<text class="lab-b" x="75" y="136" text-anchor="middle">Derinlik görüntüsü</text>
+<text class="lab" x="75" y="156" text-anchor="middle">16-bit PNG / PGM / raw</text>
+<line class="arrow" x1="140" y1="142" x2="190" y2="142" marker-end="url(#ah)"/>
+<text class="lab" x="165" y="132" text-anchor="middle">K, s</text>
+<rect class="box" x="190" y="110" width="120" height="64" rx="6"/>
+<text class="lab-b" x="250" y="136" text-anchor="middle">Geri izdüşüm</text>
+<text class="lab" x="250" y="156" text-anchor="middle">PointCloud (SoA)</text>
+<line class="arrow" x1="310" y1="142" x2="360" y2="142" marker-end="url(#ah)"/>
+<text class="lab" x="335" y="132" text-anchor="middle">O(N log N)</text>
+<rect class="box-acc" x="360" y="100" width="130" height="84" rx="6"/>
+<text class="lab-b" x="425" y="128" text-anchor="middle">PointOctree</text>
+<text class="lab" x="425" y="148" text-anchor="middle">bitişik düğümler</text>
+<text class="lab" x="425" y="166" text-anchor="middle">W_n, c_n, [b,e)</text>
+<line class="arrow" x1="490" y1="120" x2="560" y2="52" marker-end="url(#ah)"/>
+<text class="lab" x="520" y="76" text-anchor="middle">kNN / yarıçap</text>
+<line class="arrow" x1="490" y1="142" x2="560" y2="142" marker-end="url(#ah)"/>
+<text class="lab" x="525" y="132" text-anchor="middle">traverse_bh</text>
+<line class="arrow" x1="490" y1="164" x2="560" y2="236" marker-end="url(#ah)"/>
+<text class="lab" x="520" y="214" text-anchor="middle">voxel ızgara</text>
+<rect class="box" x="560" y="20" width="150" height="64" rx="6"/>
+<text class="lab-b" x="635" y="44" text-anchor="middle">Klasik ön işleme</text>
+<text class="lab" x="635" y="64" text-anchor="middle">SOR, PCA normal</text>
+<rect class="box-s2" x="560" y="110" width="150" height="64" rx="6"/>
+<text class="lab-b" x="635" y="134" text-anchor="middle">Barnes-Hut toplamları</text>
+<text class="lab" x="635" y="154" text-anchor="middle">KDE · mean shift · WLOP</text>
+<rect class="box" x="560" y="204" width="150" height="64" rx="6"/>
+<text class="lab-b" x="635" y="228" text-anchor="middle">Seyreltme</text>
+<text class="lab" x="635" y="248" text-anchor="middle">voxel centroid</text>
+<line class="arrow" x1="710" y1="52" x2="760" y2="130" marker-end="url(#ah)"/>
+<line class="arrow" x1="710" y1="142" x2="760" y2="142" marker-end="url(#ah)"/>
+<line class="arrow" x1="710" y1="236" x2="760" y2="154" marker-end="url(#ah)"/>
+<rect class="box" x="760" y="110" width="90" height="64" rx="6"/>
+<text class="lab-b" x="805" y="136" text-anchor="middle">PLY çıktı</text>
+<text class="lab" x="805" y="156" text-anchor="middle">renk = skaler</text>
+<text class="lab" x="425" y="230" text-anchor="middle">θ, κ, kesme, yaprak kapasitesi</text>
+<line class="arrow" x1="425" y1="218" x2="425" y2="190" marker-end="url(#ah)"/>
+</svg>
+<figcaption>İşleme hattı. Tek bir octree hem klasik komşuluk sorgularını hem de üç Barnes-Hut kernel toplamını besler; θ, κ, kesme yarıçapı ve yaprak kapasitesi yalnızca gezintiyi etkiler, ağaç değişmez. Kaynak: <code>pointcloud/</code> modülü, bu çalışma.</figcaption>
+</figure>
+
+<h3>Gauss kernel yoğunluk kestirimi</h3>
+<p>Her nokta için normalize Gauss KDE</p>
+<div class="eq" id="eq-kde">$$\hat\rho(q)=\frac{1}{N(2\pi)^{3/2}h^{3}}\sum_{j=1}^{N}\exp\!\left(-\frac{|q-p_j|^{2}}{2h^{2}}\right)$$</div>
+<p>hesaplanır; Barnes-Hut gezintisinde uzak düğüm \(W_n\exp(-|q-c_n|^2/2h^2)\) ile temsil edilir. Gauss çekirdeği \(4h\) ötesinde \(e^{-8}\approx 3{,}4\cdot10^{-4}\) düzeyine düştüğünden, küpü sorguya \(4h\)'den uzak düğümler tamamen atlanır ("kesme"); bu, PCL ve Open3D'deki yarıçap aramalı yaklaşımın karşılığıdır [@rusu2011; @zhou2018] ve Barnes-Hut'tan bağımsız olarak değerlendirilir. Sorguyu içeren düğüm hiçbir zaman yaklaşıklanmaz; öz terim daima kesindir.</p>
+
+<h3 id="s-hata">Hata analizi ve çekirdek-bilinçli açılma ölçütü</h3>
+<p>Düğüm \(n\) içindeki noktalar \(p_j=c_n+\delta_j\) olarak yazılsın; merkez tanımı gereği \(\sum_j w_j\delta_j=0\). \(r=q-c_n\) ve \(K(r)=\exp(-|r|^2/2h^2)\) için Taylor açılımı</p>
+<div class="eq" id="eq-taylor">$$\begin{aligned}K(r-\delta)&amp;=K(r)-\delta^{\!\top}\nabla K(r)+\tfrac12\,\delta^{\!\top}H(r)\,\delta+O(|\delta|^{3}),\\ \nabla K(r)&amp;=-\frac{r}{h^{2}}K(r),\qquad H(r)=K(r)\left(\frac{r r^{\!\top}}{h^{4}}-\frac{I}{h^{2}}\right)\end{aligned}$$</div>
+<p>verir. Toplam alındığında birinci mertebe terim merkez koşuluyla yok olur; Barnes-Hut monopolünün "ücretsiz" doğruluğu budur. İkinci mertebe terim kalır ve düğüm katkısının göreli hatasının önde gelen kısmı</p>
+<div class="eq" id="eq-err">$$\begin{gathered}\epsilon_n=\frac{1}{2W_n}\sum_{j\in n}w_j\left[\frac{(\delta_j^{\!\top}r)^{2}}{h^{4}}-\frac{|\delta_j|^{2}}{h^{2}}\right],\\ |\epsilon_n|\le\frac{3}{8}\left(\frac{s_n}{h}\right)^{2}\left(1+\frac{|r|^{2}}{h^{2}}\right)\end{gathered}$$</div>
+<p>olur; sınır, küp içinde \(|\delta_j|\le\sqrt3\,s_n/2\) olmasından çıkar. Burada belirleyici gözlem şudur: geometrik ölçüt \(s_n\lt\theta|r|\) yerine konduğunda sınır \(\tfrac38\theta^2(|r|/h)^2(1+|r|^2/h^2)\) olur ve \(|r|/h\) ile dördüncü kuvvetten büyür. Kütle çekiminde \(1/r\) potansiyelinin ölçeksiz olması nedeniyle \(s/d\) oranı yeterlidir; Gauss çekirdeğinin iç ölçeği \(h\) vardır ve \(h\)'den geniş bir hücre, sorgudan ne kadar uzak olursa olsun, çekirdeğin eğriliğini tek noktayla temsil edemez. Bu yüzden ikinci bir koşul önerilir:</p>
+<div class="eq" id="eq-kappa">$$\text{yaklaşıkla}\iff \frac{s_n}{|r|}\lt\theta\;\;\land\;\;s_n\le\kappa\,h$$</div>
+<p>Böylece \(|\epsilon_n|\le\tfrac38\kappa^2(1+|r|^2/h^2)\) olur ve kesme yarıçapı \(4h\) içinde \(6{,}4\,\kappa^2\) ile sınırlanır; mutlak hata ayrıca \(W_nK(r)\) ile çarpıldığından uzak düğümlerin katkısı bastırılır. Ölçüt, <code>traverse_bh</code> içinde tek bir karşılaştırma olarak uygulanmıştır (\(\kappa=0\) kapalı). Yaprak kapasitesi bu noktada belirleyicidir: yapraklar \(\kappa h\)'den genişse hiçbir düğüm yaklaşıklanmaz ve algoritma kesin toplama geri düşer; <a class="xref" href="#tbl-leaf"></a> bu etkileşimi ölçer.</p>
+
+<h3>Mean shift</h3>
+<p>Fukunaga ve Hostetler'in yoğunluk gradyanı kestiriminden [@fukunaga1975] türeyen ve Cheng [@cheng1995] ile Comaniciu–Meer [@comaniciu2002] tarafından kümeleme yöntemi olarak kurulan mean shift, her noktayı</p>
+<div class="eq" id="eq-meanshift">$$y^{(t+1)}=\frac{\sum_{j} p_j\,K\!\left(y^{(t)}-p_j\right)}{\sum_{j} K\!\left(y^{(t)}-p_j\right)}$$</div>
+<p>güncellemesiyle yerel yoğunluk moduna taşır. Pay ve payda iki ayrı kernel toplamıdır; Barnes-Hut'ta uzak düğüm payda \(W_nK\), payda ise \(W_nc_nK\) olarak girer. Yakınsayan modlar \(h/2\) yarıçapında birleştirilir (mod bulutu üzerinde ikinci bir octree ve birleşim-bulma). Uygulama yalnızca konum uzayında çalışır; düzlemsel yüzeylerde modlar yavaş ilerlediğinden yineleme sayısı sınırdan belirlenir. Konum–normal ortak uzayı, <a class="xref" href="#s-yon"></a>'daki üçüncü çalışma ekseninin konusudur.</p>
+
+<h3>WLOP yeniden örnekleme</h3>
+<p>Lipman ve arkadaşlarının parametrizasyonsuz izdüşüm operatörü LOP [@lipman2007] ve Huang ve arkadaşlarının yoğunluk ağırlıklı türevi WLOP [@huang2009], gürültülü bir bulutu temsil eden \(M\ll N\) noktayı, giriş noktalarına çekim ile örnek noktalar arasındaki itmenin dengesinden bulur. Her yinelemede örnek \(x_i\)</p>
+<div class="eq" id="eq-wlop">$$\begin{gathered}x_i\leftarrow\frac{\sum_j p_j\,\alpha_{ij}}{\sum_j\alpha_{ij}}+\mu\frac{\sum_{i'\neq i}(x_i-x_{i'})\,\beta_{ii'}}{\sum_{i'\neq i}\beta_{ii'}},\\ \alpha_{ij}=\frac{\vartheta(|x_i-p_j|)}{|x_i-p_j|\,v_j},\quad \beta_{ii'}=\frac{\vartheta(|x_i-x_{i'}|)\,w_{i'}}{|x_i-x_{i'}|},\quad \vartheta(r)=e^{-16r^{2}/h^{2}}\end{gathered}$$</div>
+<dl class="symbols"><dt>\(v_j\)</dt><dd>giriş yoğunluk ağırlığı \(1+\sum_k\vartheta(|p_j-p_k|)\)</dd><dt>\(w_{i'}\)</dt><dd>örnek yoğunluk ağırlığı</dd><dt>\(\mu\)</dt><dd>itme katsayısı, \(0\lt\mu\lt0{,}5\) [@huang2009]</dd><dt>\(h\)</dt><dd>destek yarıçapı [m]</dd></dl>
+<p>güncellenir. Dört toplamın dördü de kernel toplamıdır: \(v_j\) giriş ağacı üzerinde, \(w_{i'}\) ve itme örnek ağacı üzerinde, çekim ise \(1/v_j\) ağırlıklı giriş ağacı üzerinde Barnes-Hut ile hesaplanır. İtme terimi, deponun orijinal Coulomb kuvvet hesabıyla biçimsel olarak aynıdır: işaret ve çekirdek dışında \(\sum (x_i-x_{i'})\,f(|x_i-x_{i'}|)\). WLOP'un derinlik verisi için değeri, <a class="xref" href="#eq-density-area"></a>'deki \(1/z^2\) yanlılığını \(v_j\) ağırlıklarıyla giderip düzgün aralıklı bir temsil üretmesidir; düzgünlük, en yakın komşu uzaklığının varyasyon katsayısı (CoV) ile ölçülür.</p>
+
+<h2 id="s-uygulama">Uygulama ve doğrulama</h2>
+<p>Eklenen modül <a class="xref" href="#tbl-components"></a>'de özetlenmiştir; bütün bileşenler deponun <code>Vector3D</code>, <code>Real</code> ve <code>Timer</code> türlerini paylaşır ve harici bağımlılık olarak yalnızca isteğe bağlı libpng kullanır.</p>
+<figure class="tbl" id="tbl-components"><figcaption>Eklenen modülün dosyaları ve satır sayıları. Kaynak: <code>pointcloud/</code> dizini, bu çalışma.</figcaption>
+<div class="scroll"><table>
+<thead><tr><th>Dosya</th><th>İşlev</th></tr></thead>
+<tbody>
+<tr><td><code>point_cloud.h/.cpp</code></td><td>SoA bulut, pinhole iç parametreler, derinlik→bulut, PLY/PCD/XYZ okuma-yazma, 16-bit PNG (libpng), PGM, raw</td></tr>
+<tr><td><code>point_octree.h/.cpp</code></td><td>Lineer octree; yarıçap, kNN, <code>traverse_bh(q, θ, kesme, far, near, κh)</code></td></tr>
+<tr><td><code>algorithms.h/.cpp</code></td><td>Voxel seyreltme, PCA normal (kameraya yönlendirme, Hoppe [@hoppe1992]), SOR [@rusu2008], yarıçap filtresi, BH-KDE, BH-mean-shift, BH-WLOP, NN istatistikleri, göreli hata</td></tr>
+<tr><td><code>synthetic.h/.cpp</code></td><td>Işın izlemeli sahne: zemin, arka ve yan duvar, küre, kutu; \(\sigma_z=cz^2\) gürültü, düşen piksel, yüzey etiketleri</td></tr>
+<tr><td><code>pointcloud_tool.cpp</code></td><td>CLI: <code>info synthetic depth2cloud downsample normals sor density meanshift resample bench</code></td></tr>
+<tr><td><code>tests/test_pointcloud.cpp</code></td><td>6 test grubu, <code>ctest</code> ile</td></tr>
+<tr><td><code>tools/depth_png_to_pgm.py</code></td><td>libpng olmayan makineler için numpy/Pillow dönüştürücü</td></tr>
+</tbody></table></div></figure>
+<p>Testler şunları doğrular: yarıçap ve kNN sorgularının 50 rastgele sorguda kaba kuvvetle birebir eşleşmesi (çakışık 40 nokta dahil); \(\theta=0\) Barnes-Hut toplamının kaba kuvvet KDE ile \(10^{-9}\) göreli toleransta eşitliği ve \(N^2\) değerlendirme sayısı; hatanın \(\theta\) küçüldükçe tekdüze azalması ve \(\kappa=0{,}5\)'in hatayı artırmaması; üç Gauss öbeğinin mean shift ile üç kümeye ayrılması; düzlem üzerinde PCA normallerinin kameraya yönlenmesi; sentetik karenin geri izdüşümünün piksele geri izdüşürüldüğünde \(10^{-6}\) piksel içinde kapanması ve zemin/duvar noktalarının analitik düzlemlerde olması; PLY ikili/metin, XYZ, PGM ve PCD okuma-yazma döngüleri; WLOP'un düzgünlüğü artırıp noktaları düzlemde tutması. Altı grup da geçmektedir. Ayrıca aynı derinlik karesinin libpng yolu, PGM yolu ve Python dönüştürücü yolu birebir aynı 301 099 noktayı ve aynı sınır kutusunu üretmiştir.</p>
+<details class="more"><summary>Derleme ve çalıştırma komutları</summary><pre><code class="language-bash">cmake -S . -B build -DCMAKE_BUILD_TYPE=Release &amp;&amp; cmake --build build -j &amp;&amp; ctest --test-dir build
+build/pointcloud/pointcloud_tool synthetic -o synth.ply --pgm synth.pgm --labels
+build/pointcloud/pointcloud_tool depth2cloud depth.png --fx 525 --fy 525 --cx 319.5 --cy 239.5 --scale 5000 -o frame.ply
+build/pointcloud/pointcloud_tool sor frame.ply --k 20 --std 2.0 -o clean.ply
+build/pointcloud/pointcloud_tool normals clean.ply --k 20 --viewpoint 0,0,0 -o normals.ply
+build/pointcloud/pointcloud_tool density clean.ply --h 0.03 --theta 0.5 --kappa 1 --compare -o density.ply
+build/pointcloud/pointcloud_tool meanshift ds.ply --h 0.08 --theta 0.5 --min-size 100 -o segments.ply
+build/pointcloud/pointcloud_tool resample ds.ply --count 5000 --h 0.08 --theta 0.5 -o uniform.ply
+build/pointcloud/pointcloud_tool bench --sizes 10000,20000,50000,100000 --thetas 0,0.3,0.5,0.7,1.0 --kappas 0,1,0.5 --h 0.05 --leaf 8 --csv bench.csv</code></pre></details>
+
+<h2 id="s-sonuc">Sentetik karede sonuçlar</h2>
+<p>Tam kare (301 099 geçerli nokta) üzerinde ön işleme adımları dört iş parçacığıyla şu süreleri aldı: SOR (k=20, 2σ) 0,90 s ve 9 281 nokta elendi; PCA normal kestirimi (k=20) 0,46 s; 1 cm voxel seyreltme 0,20 s ile 216 696 nokta; \(h=2\) cm Barnes-Hut KDE (\(\theta=0{,}5\), kesme \(4h\)) 0,91 s ve sorgu başına 295 değerlendirme. Octree inşası 301 099 nokta için 27 ms sürmüştür; 30 kare/s'lik bir akışta bütçenin yüzde birinden azıdır. <a class="xref" href="#fig-scene"></a>, sahneyi ve üç algoritmanın çıktısını kamera bakışından gösterir.</p>
+<figure class="fig wide" id="fig-scene">
+<div class="grid4">
+  <div><img src="{{img_scene_labels}}" alt="Sentetik sahnenin yüzey etiketleri: yeşil arka duvar, mor yan duvar, mavi zemin, turkuaz küre, turuncu kutu"><p class="panel-lab">(a) Yüzey etiketleri (gerçek referans)</p></div>
+  <div><img src="{{img_density_full}}" alt="Gauss KDE ile renklendirilmiş nokta yoğunluğu; yakın kutu ve küre sarı (yüksek), uzak duvar mor (düşük)"><p class="panel-lab">(b) BH-KDE, \(h=2\) cm; viridis, 2–98 persentil</p></div>
+  <div><img src="{{img_meanshift_ds}}" alt="Mean shift kümeleri: kutu, küre ve yan duvar ayrı; zemin ile arka duvar tek küme"><p class="panel-lab">(c) BH mean shift, \(h=8\) cm, 4 küme</p></div>
+  <div><img src="{{img_wlop_ds}}" alt="WLOP ile 4000 noktaya yeniden örneklenmiş bulut; üç boyutta düzgün aralıklı noktalar, yakın yüzeylerde görüntüde seyrek"><p class="panel-lab">(d) BH-WLOP, 4 000 nokta, \(h=8\) cm</p></div>
+</div>
+<figcaption>Sentetik derinlik karesinin kamera bakışından dört görünümü (640×480, piksele yeniden izdüşüm). (b)'de yoğunluk <a class="xref" href="#eq-density-area"></a>'yi izler: 1,6–2,2 m'deki kutu ve küre 3 m'deki duvardan belirgin biçimde yoğundur, sığ açıyla görülen zemin en seyrektir. (c)'de konum uzayında mean shift nesneleri ayırır ancak birbirine değen iki düzlemi (zemin–arka duvar) ayıramaz. (d)'de WLOP üç boyutta eşit aralık üretir; bu nedenle yakın yüzeyler görüntüde daha seyrek görünür, yani \(1/z^2\) yanlılığı giderilmiştir. Üretim: <code>pointcloud_tool</code>, 4 Kasım 2026.</figcaption>
+</figure>
+
+<h3>Doğruluk–süre dengesi</h3>
+<p>Benchmark, aynı sentetik kareden rastgele alt örneklenen 10 000–{{nmax}} noktalık bulutlarda \(h=5\) cm Gauss KDE'yi kesin toplamla karşılaştırır; yaprak kapasitesi {{leaf_main}}, {{threads}} iş parçacığı, her ölçüm iki tekrarın en iyisidir. {{nmax}} noktada kesin toplam {{exact_time_nmax}} s ve sorgu başına {{exact_perq}} değerlendirme gerektirir. Yalnızca \(4h\) kesmesi (Barnes-Hut yok) süreyi {{kde_time_cut}} s'ye ({{kde_speedup_cut}} kat) indirir ve RMS hata {{kde_rms_cut}} ile kesmenin kendi hatasını gösterir. Geometrik ölçüt eklenince \(\theta=0{,}5\) için {{kde_time_t05_k00}} s ve RMS {{kde_rms_t05_k00}}, \(\theta=0{,}7\) için {{kde_time_t07_k00}} s ve RMS {{kde_rms_t07_k00}}, \(\theta=1{,}0\) için {{kde_time_t10_k00}} s ve RMS {{kde_rms_t10_k00}} elde edilir; en büyük nokta hatası \(\theta=0{,}5\)'te {{kde_max_t05_k00}}'e ulaşır. </p>
+<p>Çekirdek-bilinçli sınır \(\kappa=1\), \(\theta=0{,}5\)'te RMS hatayı {{kde_rms_t05_k10}}'e ve en büyük hatayı {{kde_max_t05_k10}}'e çeker; süre {{kde_time_t05_k10}} s olur, yani geometrik ölçüte göre yaklaşık iki kat sürede sekiz kat küçük hata. \(\theta=0{,}7\) ile \(\kappa=1\) de aynı hata düzeyini verir ({{kde_rms_t07_k10}}); \(\kappa\) bağlayıcı olduğunda \(\theta\)'nın etkisi kaybolur. \(\kappa=0{,}5\) ise {{leaf_main}} kapasiteli yapraklar \(0{,}5h=2{,}5\) cm'den geniş kaldığı için yaklaşıklamayı neredeyse tamamen kapatır ({{kde_time_t05_k05}} s) ve yalnız kesmeli kaba kuvvet tarafından baskılanır: kesme tek başına hem daha hızlı hem daha doğrudur. Bu, \(\kappa\)'nın yaprak kapasitesinden bağımsız seçilemeyeceğinin doğrudan kanıtıdır. <a class="xref" href="#fig-pareto"></a> bütün noktaları hata–süre düzleminde, <a class="xref" href="#tbl-kde"></a> ise sayısal değerleriyle gösterir.</p>
+<figure class="fig wide" id="fig-pareto">
+<div class="legend"><span><i style="background:var(--s1)"></i>κ kapalı (geometrik ölçüt)</span><span><i style="background:var(--s2)"></i>κ = 1</span><span><i style="background:var(--s3)"></i>κ = 0,5</span><span><i style="background:var(--s0)"></i>yalnız 4h kesmesi</span></div>
+<div class="scroll">{{svg_pareto}}</div>
+<figcaption>Gauss KDE'de hesap süresi ile kesin toplama göre göreli RMS hata, N = {{nmax}}, h = 5 cm, kesme 4h, yaprak kapasitesi {{leaf_main}}. Her nokta bir (θ, κ) ayarıdır; sol-alt köşeye yakın olan daha iyidir. Düşey çizgi kesin toplamın süresidir. Veri: <code>bench_main.csv</code>, bu çalışma, 4 Kasım 2026.</figcaption>
+</figure>
+<figure class="tbl" id="tbl-kde"><figcaption>Aynı deneyin sayısal değerleri, N = {{nmax}}. "Sorgu başına" sütunu uzak düğüm ve nokta değerlendirmelerinin toplamıdır. Veri: <code>bench_main.csv</code>.</figcaption>
+<div class="scroll"><table>
+<thead><tr><th>θ</th><th>κ</th><th>Süre [s]</th><th>Hızlanma</th><th>Sorgu başına değerlendirme</th><th>RMS göreli hata</th><th>En büyük göreli hata</th></tr></thead>
+<tbody>{{table_kde}}</tbody></table></div></figure>
+<p>Ölçeklenme <a class="xref" href="#fig-scaling"></a>'de verilmiştir: kesin toplam \(N^2\) eğimini izlerken Barnes-Hut varyantları 10 000'den {{nmax}}'e giderken \(N\log N\)'e yakın büyür. Hızlanma, kesme ve yaklaşıklamanın birlikte etkisidir; kesme tek başına sabit bir komşu sayısıyla sorgu maliyetini zaten \(O(1)\)'e indirdiğinden, Barnes-Hut'un ek katkısı komşu sayısının büyük olduğu, yani \(h\)'nin nokta aralığına göre büyük olduğu rejimde belirginleşir. Bu, derinlik verisinde yakın yüzeylerde ve küçük voxel boyutlarında tam da gerçekleşen durumdur.</p>
+<figure class="fig wide" id="fig-scaling">
+<div class="legend"><span><i style="background:var(--s0)"></i>kesin</span><span><i style="background:var(--s1)"></i>θ = 0,5</span><span><i style="background:var(--s2)"></i>θ = 0,5, κ = 1</span><span><i style="background:var(--s3)"></i>θ = 0,7</span></div>
+<div class="scroll">{{svg_scaling}}</div>
+<figcaption>KDE hesap süresinin nokta sayısına göre değişimi (her iki eksen logaritmik). Kesikli referans çizgi en küçük N'deki kesin süreden başlatılan N² eğimidir. Veri: <code>bench_main.csv</code>, 4 Kasım 2026.</figcaption>
+</figure>
+<p><a class="xref" href="#tbl-mswlop"></a>'teki mean shift ve WLOP sonuçlarında hızlanma KDE'dekinden küçüktür, çünkü her ikisinde de sorgu noktaları yinelemeyle hareket eder ve kesme yarıçapı \(4h=32\) cm içinde zaten binlerce nokta vardır; yaklaşıklama bu kalabalığın yalnızca uzak kısmını kapatır. Buna karşılık sonuç kalitesi θ'dan neredeyse bağımsızdır: küme sayısı ve etiket uyumu tabloda görülen düzeyde korunur, WLOP düzgünlüğü (CoV) kesin çalıştırmayla aynı kalır. Bu, iki algoritmanın hataya karşı yapısal olarak dayanıklı olmasındandır; yineleme her adımda yaklaşıklama hatasını yeniden düzeltir. Dayanıklılığın sınırı vardır: \(\theta=1{,}0\)'da mean shift {{ms_clusters_t10}} küme üretir ve etiket uyumu {{ms_agree_t10}}'e düşer, çünkü hücre genişliği uzaklığa eşit olduğunda mod hesabı yerel yoğunluk yapısını kaybeder. Güvenli aralık bu veri için \(\theta\le0{,}7\)'dir.</p>
+<figure class="tbl" id="tbl-mswlop"><figcaption>Mean shift (h = 8 cm, en çok 30 yineleme, kesme 4h, küme eşiği 50 nokta) ve WLOP (h = 8 cm, M = {{wlop_m}}, 10 yineleme) için θ taraması, N = {{nmax}}. "Etiket uyumu", θ = 0 çalıştırmasının etiketleriyle çoğunluk eşlemesi sonrası aynı kümeye düşen nokta oranıdır. Veri: <code>bench_main.csv</code>.</figcaption>
+<div class="scroll"><table>
+<thead><tr><th>θ</th><th>MS süre [s]</th><th>MS hızlanma</th><th>Küme</th><th>Etiket uyumu</th><th>WLOP süre [s]</th><th>WLOP hızlanma</th><th>NN CoV</th></tr></thead>
+<tbody>{{table_ms_wlop}}</tbody></table></div></figure>
+
+<figure class="tbl" id="tbl-leaf"><figcaption>Yaprak kapasitesinin KDE süre ve hatasına etkisi, N = 50 000, h = 5 cm. Her hücre "süre / RMS göreli hata" biçimindedir. Veri: <code>bench_leaf*.csv</code> ve <code>bench_main.csv</code>.</figcaption>
+<div class="scroll"><table>
+<thead><tr><th>Yaprak</th><th>İnşa [ms]</th><th>Kesin [s]</th><th>θ=0,5</th><th>θ=0,5, κ=1</th><th>θ=0,7</th><th>θ=0,7, κ=1</th></tr></thead>
+<tbody>{{table_leaf}}</tbody></table></div></figure>
+<p class="key">Gauss çekirdeğinde Barnes-Hut'un hata–süre dengesi tek başına θ ile değil, θ, κ ve yaprak kapasitesinin birlikte seçimiyle belirlenir; bu üçlünün \(h\) ve nokta aralığına göre nasıl seçileceği, açık ve ölçülebilir bir araştırma sorusudur.</p>
+
+<h2 id="s-yon">Önerilen akademik çalışma eksenleri</h2>
+<p><a class="xref" href="#tbl-directions"></a>'daki dört eksen, bu oturumda çalışır hâle getirilen altyapı üzerinde doğrudan başlatılabilir. Her biri için araştırma sorusu, çürütülebilir hipotez, karşılaştırma tabanı, veri ve ölçüt verilmiştir; bir yüksek lisans tezi ilk ikisini, bir doktora tezi dördünü kapsayabilir. Literatür konumlandırması bu oturumda scite künye doğrulamasıyla sınırlıdır; her eksen için gönderim öncesi sistematik bir yakın-rakip taraması yapılmalıdır.</p>
+<figure class="tbl wide" id="tbl-directions"><figcaption>Dört çalışma ekseninin özeti. "Taban" sütunu karşılaştırılacak yöntemleri, "Ölçüt" sütunu birincil başarı ölçüsünü verir.</figcaption>
+<div class="scroll"><table>
+<thead><tr><th>Eksen</th><th>Araştırma sorusu</th><th>Hipotez</th><th>Taban</th><th>Veri</th><th>Ölçüt</th></tr></thead>
+<tbody>
+<tr><td>A. Çekirdek-bilinçli açılma ölçütü</td><td>Gauss ve benzeri ölçekli çekirdekler için octree açılma ölçütü (θ, κ, yaprak) nasıl seçilmeli?</td><td>\(\kappa h\) sınırı, aynı sürede geometrik ölçütten en az bir mertebe küçük en-büyük hata verir; en iyi yaprak kapasitesi \(h\)/aralık oranının fonksiyonudur</td><td>Yarıçap kesmeli kaba kuvvet (PCL/Open3D), IFGT [@yang2003], ikili-ağaç KDE</td><td>Sentetik + TUM RGB-D [@tum2012] + NYU v2 [@silberman2012]</td><td>Hata–süre Pareto eğrisi; teorik sınırın deneysel doğrulanması</td></tr>
+<tr><td>B. BH-WLOP ile yanlılık giderme</td><td>Derinlik verisinin \(1/z^2\) örnekleme yanlılığı WLOP ile giderilebilir mi ve BH bunu kare hızında mümkün kılar mı?</td><td>BH-WLOP, voxel ve Poisson-disk seyreltmeden düşük CoV ve referans yüzeye düşük Chamfer uzaklığı verir; θ=0,7'ye kadar kalite kaybı ölçülemez</td><td>Voxel centroid, en-uzak-nokta örnekleme, Poisson-disk (Open3D), CGAL WLOP</td><td>Sentetik (analitik yüzeyler), ScanNet [@dai2017] yeniden yapılandırmaları</td><td>NN CoV, Chamfer/Hausdorff, normal açısı hatası, kare başına süre</td></tr>
+<tr><td>C. Konum–normal uzayında BH mean shift</td><td>6-D (konum + normal) mean shift, RGB-D karelerinde düzlem ve nesne bölütlemesinde BH ile gerçek zamana yaklaşır mı?</td><td>Ortak uzayda bölütleme, zemin–duvar gibi bitişik düzlemleri ayırır; BH ile 640×480 karede saniyenin altına iner</td><td>RANSAC düzlem bölütleme (PCL), bölge büyütme [@holz2014], normal tabanlı yöntemler</td><td>NYU v2 etiketleri, ScanNet</td><td>mIoU, düzlem sayısı doğruluğu, süre</td></tr>
+<tr><td>D. Lineer octree ile GPU/akış işleme</td><td>İndeks tabanlı octree, Karras tipi paralel inşa ve warp-uyumlu BH gezintisiyle 30 kare/s'ye taşınabilir mi?</td><td>Kare başına inşa + KDE + normal toplamı 33 ms altına iner; CPU'ya göre hızlanma 10 kattan fazladır</td><td>Bu çalışmanın CPU/OpenMP sürümü; Burtscher–Pingali BH [@burtscher2011]; cuKD-tree</td><td>TUM RGB-D akışları, canlı RealSense</td><td>Kare süresi dağılımı, bellek, enerji</td></tr>
+</tbody></table></div></figure>
+<h3>A. Çekirdek-bilinçli açılma ölçütü</h3>
+<p>Bu eksen en kısa yoldan yayınlanabilir olandır, çünkü teorik iddia (<a class="xref" href="#eq-err"></a>) ve ölçüm altyapısı hazırdır. Yapılacak iş, sınırın üçüncü mertebe kalanını da kapsayan kesin bir üst sınıra dönüştürülmesi, θ–κ–yaprak uzayında Pareto sınırının çıkarılması ve bunun yarıçap kesmeli kaba kuvvet ile IFGT'ye karşı konumlandırılmasıdır. Salmon ve Warren'in kütle çekimi için yaptığı hata-kontrollü ölçüt tartışması [@salmon1994] doğrudan şablon oluşturur. Anizotropik ya da değişken bant genişlikli çekirdekler (derinlikle büyüyen \(h(z)\)) doğal uzantıdır ve derinlik verisinin gürültü modeline (<a class="xref" href="#eq-noise"></a>) bağlanır.</p>
+<h3>B. BH-WLOP ile örnekleme yanlılığının giderilmesi</h3>
+<p>WLOP'un derinlik kamerası verisi için kullanımı, yüzey yeniden yapılandırma literatüründe Berger ve arkadaşlarının taramasında ele alınan tüketici sınıfı sensör gürültüsü bağlamına oturur [@berger2017]. Özgün değer iddiası iki parçalıdır: birincisi, \(v_j\) ağırlıklarının <a class="xref" href="#eq-density-area"></a>'deki analitik yoğunluk modeliyle ilişkilendirilmesi ve WLOP'un bu yanlılığı ne ölçüde giderdiğinin nicelenmesi; ikincisi, bütün WLOP toplamlarının tek bir octree gezintisiyle Barnes-Hut ile hesaplanmasının kare hızında yeniden örneklemeyi mümkün kılması. Bu oturumdaki ölçümde {{nmax}} noktadan {{wlop_m}} noktaya 10 yinelemeli WLOP kesin toplamla {{wlop_exact_time}} s, θ=0,7 ile {{wlop_time_t07}} s sürmüş ve CoV değişmemiştir; iyileştirme alanı attraction teriminin kesme yarıçapında ve yinelemeler arası ağaç yeniden kullanımındadır.</p>
+<h3>C. Konum–normal uzayında mean shift bölütleme</h3>
+<p><a class="xref" href="#fig-scene"></a>(c), konum uzayında mean shift'in bitişik düzlemleri ayıramadığını gösterir. Comaniciu ve Meer'in görüntü bölütlemesinde uzamsal ve renk alanlarını ortak çekirdekte birleştirmesi gibi [@comaniciu2002], konum ve PCA normali ortak bir 6-D uzayda birleştirilebilir; normal bileşeni için küresel çekirdek (von Mises–Fisher) ya da açısal Gauss kullanılır. Octree bu durumda yalnızca konum üzerinde kurulur; düğüm, normallerin ağırlıklı ortalamasını ve dağılımını da taşır ve açılma ölçütüne normal dağılımı eklenir. Bu, "düğüm istatistiklerinin genişletildiği Barnes-Hut" olarak kendi başına bir yöntem katkısıdır. Değerlendirme NYU v2 [@silberman2012] etiketleriyle mIoU üzerinden yapılır; RANSAC ve bölge büyütme [@holz2014] tabanlarıyla karşılaştırılır.</p>
+<h3>D. Lineer octree, GPU ve akış</h3>
+<p>Depoda zaten bir CUDA görselleştirici vardır ve <code>ANALYSIS_DATA_STRUCTURES.md</code> işaretçi tabanlı ağacın GPU'ya taşınamayacağını saptamıştır; yeni <code>PointOctree</code> bu engeli kaldırır. Karras'ın Morton kodlu paralel inşası [@karras2012] ve Burtscher–Pingali'nin warp-uyumlu BH gezintisi [@burtscher2011] doğrudan uygulanabilir. Araştırma sorusu, her karede ağacı yeniden kurmak ile OctoMap tarzı kalıcı bir octree'yi [@hornung2013] güncellemek arasındaki dengedir; KinectFusion'ın hacimsel yaklaşımı [@newcombe2011] burada karşıt uçtur. Ölçüt kare süresi dağılımı (ortalama değil, 99. persentil) olmalıdır. Veri kümeleri <a class="xref" href="#tbl-datasets"></a>'de, zaman planı <a class="xref" href="#tbl-plan"></a>'de verilmiştir.</p>
+<figure class="tbl" id="tbl-datasets"><figcaption>Önerilen veri kümeleri ve kullanım amacı. İç parametreler ve ölçek faktörü her veri kümesinin kendi belgesinden alınmalıdır.</figcaption>
+<div class="scroll"><table>
+<thead><tr><th>Veri</th><th>Sensör</th><th>Sağladığı</th><th>Kullanım</th></tr></thead>
+<tbody>
+<tr><td>Sentetik sahne (bu çalışma)</td><td>Model</td><td>Analitik yüzeyler, etiket, gürültüsüz referans</td><td>Hata sınırının doğrulanması, Chamfer referansı</td></tr>
+<tr><td>TUM RGB-D [@tum2012]</td><td>Kinect v1</td><td>Zaman damgalı derinlik PNG (ölçek 5000), yörünge gerçeği</td><td>Akış/çevrimiçi senaryolar, eksen A ve D</td></tr>
+<tr><td>NYU Depth v2 [@silberman2012]</td><td>Kinect v1</td><td>1 449 yoğun etiketli kare</td><td>Bölütleme (eksen C)</td></tr>
+<tr><td>ScanNet [@dai2017]</td><td>Structure Sensor</td><td>1 513 tarama, yüzey yeniden yapılandırması</td><td>Yeniden örnekleme referansı (eksen B)</td></tr>
+<tr><td>Kendi kaydı</td><td>RealSense D4xx / Azure Kinect</td><td>Güncel sensör gürültü modeli [@keselman2017]</td><td>Genellenebilirlik, canlı demo</td></tr>
+</tbody></table></div></figure>
+<figure class="tbl" id="tbl-plan"><figcaption>Önerilen iş planı; süreler bir araştırmacı için tahmindir ve ölçülmemiştir.</figcaption>
+<div class="scroll"><table>
+<thead><tr><th>Dönem</th><th>İş</th><th>Çıktı</th></tr></thead>
+<tbody>
+<tr><td>Ay 1–2</td><td>Eksen A: kesin hata sınırı, θ–κ–yaprak taraması, IFGT ve kaba kuvvet tabanları, gerçek veri</td><td>Konferans bildirisi</td></tr>
+<tr><td>Ay 3–5</td><td>Eksen B: WLOP tabanları, Chamfer/normal ölçütleri, değişken \(h(z)\)</td><td>Dergi makalesi taslağı (A+B birleşik)</td></tr>
+<tr><td>Ay 6–9</td><td>Eksen C: 6-D çekirdek, genişletilmiş düğüm istatistikleri, NYU v2 değerlendirmesi</td><td>İkinci makale</td></tr>
+<tr><td>Ay 10–14</td><td>Eksen D: CUDA inşa ve gezinti, canlı kamera, 99. persentil kare süresi</td><td>Sistem makalesi, açık kaynak sürüm</td></tr>
+</tbody></table></div></figure>
+
+<h2 id="s-sinir">Sınırlılıklar ve doğrulanamayanlar</h2>
+<p>Bütün ölçümler tek bir sentetik sahneden alınmıştır; gerçek sensör verisi (TUM, NYU, canlı kamera) bu oturumda kullanılmamıştır ve gürültü modeli \(\sigma_z=cz^2\) ile düşen piksel oranı literatürden esinlenen tahminlerdir, belirli bir cihaz için kalibre edilmemiştir. Süre ölçümleri 4 çekirdekli bir bulut konteynerinde alınmıştır ve mutlak değerler donanıma bağlıdır; göreli karşılaştırmalar aynı koşullarda yapıldığından anlamlıdır. Hata analizi ikinci mertebe Taylor terimini ele alır; üçüncü mertebe kalan ihmal edilmiştir ve verilen ifade bir üst sınır değil önde gelen terim kestirimidir. </p>
+<p>Mean shift yalnızca konum uzayında, WLOP ise sabit \(h\) ile uygulanmıştır; IFGT, PCL ve Open3D ile doğrudan süre karşılaştırması yapılmamıştır ve bu kütüphaneler bu ortamda kurulu değildir. CUDA araç zinciri yoktur; GPU ile ilgili ifadeler literatüre dayanır, bu oturumda derlenmemiştir. Kaynakların künyeleri scite ile doğrulanmış, ancak tam metinleri bu oturumda okunmamıştır; atıflar her kaynağın yaygın bilinen temel katkısına yöneliktir. Gray–Moore ve van der Maaten künyeleri scite'ta eşleşmediğinden DOĞRULANMADI olarak işaretlenmiştir. Yayın mecrası ve iş planı önerileri ölçülmemiş yargılardır.</p>
+
+<h2 id="s-kaynak" class="unnumbered">Kaynaklar</h2>
+<ol class="refs">
+<li id="ref-barnes1986">J. Barnes ve P. Hut, "A hierarchical O(N log N) force-calculation algorithm", <i>Nature</i>, c. 324, s. 446–449, 1986. <a href="https://doi.org/10.1038/324446a0">doi:10.1038/324446a0</a></li>
+<li id="ref-greengard1987">L. Greengard ve V. Rokhlin, "A fast algorithm for particle simulations", <i>Journal of Computational Physics</i>, c. 73, sy. 2, s. 325–348, 1987. <a href="https://doi.org/10.1016/0021-9991(87)90140-9">doi:10.1016/0021-9991(87)90140-9</a></li>
+<li id="ref-salmon1994">J. K. Salmon ve M. S. Warren, "Skeletons from the treecode closet", <i>Journal of Computational Physics</i>, c. 111, sy. 1, s. 136–155, 1994. <a href="https://doi.org/10.1006/jcph.1994.1050">doi:10.1006/jcph.1994.1050</a></li>
+<li id="ref-barnes1990">J. E. Barnes, "A modified tree code: Don't laugh; it runs", <i>Journal of Computational Physics</i>, c. 87, sy. 1, s. 161–170, 1990. <a href="https://doi.org/10.1016/0021-9991(90)90232-P">doi:10.1016/0021-9991(90)90232-P</a></li>
+<li id="ref-gray2001" class="unverified">A. G. Gray ve A. W. Moore, "N-Body problems in statistical learning", <i>Advances in Neural Information Processing Systems 13</i>, MIT Press, 2001. Künye scite'ta eşleşmedi; DOI yok.</li>
+<li id="ref-vandermaaten2014" class="unverified">L. van der Maaten, "Accelerating t-SNE using tree-based algorithms", <i>Journal of Machine Learning Research</i>, c. 15, s. 3221–3245, 2014. Künye scite'ta eşleşmedi; JMLR DOI vermez.</li>
+<li id="ref-greengard1991">L. Greengard ve J. Strain, "The fast Gauss transform", <i>SIAM Journal on Scientific and Statistical Computing</i>, c. 12, sy. 1, s. 79–94, 1991. <a href="https://doi.org/10.1137/0912004">doi:10.1137/0912004</a></li>
+<li id="ref-yang2003">C. Yang, R. Duraiswami, N. A. Gumerov ve L. Davis, "Improved fast Gauss transform and efficient kernel density estimation", <i>Proc. IEEE ICCV</i>, 2003. <a href="https://doi.org/10.1109/ICCV.2003.1238383">doi:10.1109/ICCV.2003.1238383</a></li>
+<li id="ref-fukunaga1975">K. Fukunaga ve L. Hostetler, "The estimation of the gradient of a density function, with applications in pattern recognition", <i>IEEE Transactions on Information Theory</i>, c. 21, sy. 1, s. 32–40, 1975. <a href="https://doi.org/10.1109/TIT.1975.1055330">doi:10.1109/TIT.1975.1055330</a></li>
+<li id="ref-cheng1995">Y. Cheng, "Mean shift, mode seeking, and clustering", <i>IEEE Transactions on Pattern Analysis and Machine Intelligence</i>, c. 17, sy. 8, s. 790–799, 1995. <a href="https://doi.org/10.1109/34.400568">doi:10.1109/34.400568</a></li>
+<li id="ref-comaniciu2002">D. Comaniciu ve P. Meer, "Mean shift: A robust approach toward feature space analysis", <i>IEEE Transactions on Pattern Analysis and Machine Intelligence</i>, c. 24, sy. 5, s. 603–619, 2002. <a href="https://doi.org/10.1109/34.1000236">doi:10.1109/34.1000236</a></li>
+<li id="ref-lipman2007">Y. Lipman, D. Cohen-Or, D. Levin ve H. Tal-Ezer, "Parameterization-free projection for geometry reconstruction", <i>ACM Transactions on Graphics</i>, c. 26, sy. 3, 2007. <a href="https://doi.org/10.1145/1276377.1276405">doi:10.1145/1276377.1276405</a></li>
+<li id="ref-huang2009">H. Huang, D. Li, H. Zhang, U. Ascher ve D. Cohen-Or, "Consolidation of unorganized point clouds for surface reconstruction", <i>ACM Transactions on Graphics</i>, c. 28, sy. 5, 2009. <a href="https://doi.org/10.1145/1618452.1618522">doi:10.1145/1618452.1618522</a></li>
+<li id="ref-hoppe1992">H. Hoppe, T. DeRose, T. Duchamp, J. McDonald ve W. Stuetzle, "Surface reconstruction from unorganized points", <i>Proc. SIGGRAPH</i>, s. 71–78, 1992. <a href="https://doi.org/10.1145/142920.134011">doi:10.1145/142920.134011</a></li>
+<li id="ref-rusu2008">R. B. Rusu, Z. C. Marton, N. Blodow, M. Dolha ve M. Beetz, "Towards 3D point cloud based object maps for household environments", <i>Robotics and Autonomous Systems</i>, c. 56, sy. 11, s. 927–941, 2008. <a href="https://doi.org/10.1016/j.robot.2008.08.005">doi:10.1016/j.robot.2008.08.005</a></li>
+<li id="ref-rusu2011">R. B. Rusu ve S. Cousins, "3D is here: Point Cloud Library (PCL)", <i>Proc. IEEE ICRA</i>, 2011. <a href="https://doi.org/10.1109/ICRA.2011.5980567">doi:10.1109/ICRA.2011.5980567</a></li>
+<li id="ref-zhou2018">Q.-Y. Zhou, J. Park ve V. Koltun, "Open3D: A modern library for 3D data processing", arXiv:1801.09847, 2018. <a href="https://doi.org/10.48550/arXiv.1801.09847">doi:10.48550/arXiv.1801.09847</a></li>
+<li id="ref-bentley1975">J. L. Bentley, "Multidimensional binary search trees used for associative searching", <i>Communications of the ACM</i>, c. 18, sy. 9, s. 509–517, 1975. <a href="https://doi.org/10.1145/361002.361007">doi:10.1145/361002.361007</a></li>
+<li id="ref-elseberg2013">J. Elseberg, D. Borrmann ve A. Nüchter, "One billion points in the cloud – an octree for efficient processing of 3D laser scans", <i>ISPRS Journal of Photogrammetry and Remote Sensing</i>, c. 76, s. 76–88, 2013. <a href="https://doi.org/10.1016/j.isprsjprs.2012.10.004">doi:10.1016/j.isprsjprs.2012.10.004</a></li>
+<li id="ref-behley2015">J. Behley, V. Steinhage ve A. B. Cremers, "Efficient radius neighbor search in three-dimensional point clouds", <i>Proc. IEEE ICRA</i>, 2015. <a href="https://doi.org/10.1109/ICRA.2015.7139702">doi:10.1109/ICRA.2015.7139702</a></li>
+<li id="ref-hornung2013">A. Hornung, K. M. Wurm, M. Bennewitz, C. Stachniss ve W. Burgard, "OctoMap: An efficient probabilistic 3D mapping framework based on octrees", <i>Autonomous Robots</i>, c. 34, s. 189–206, 2013. <a href="https://doi.org/10.1007/s10514-012-9321-0">doi:10.1007/s10514-012-9321-0</a></li>
+<li id="ref-karras2012">T. Karras, "Maximizing parallelism in the construction of BVHs, octrees, and k-d trees", <i>Proc. High-Performance Graphics</i>, s. 33–37, 2012. <a href="https://doi.org/10.2312/EGGH/HPG12/033-037">doi:10.2312/EGGH/HPG12/033-037</a></li>
+<li id="ref-burtscher2011">M. Burtscher ve K. Pingali, "An efficient CUDA implementation of the tree-based Barnes Hut n-body algorithm", <i>GPU Computing Gems Emerald Edition</i>, s. 75–92, 2011. <a href="https://doi.org/10.1016/B978-0-12-384988-5.00006-1">doi:10.1016/B978-0-12-384988-5.00006-1</a></li>
+<li id="ref-khoshelham2012">K. Khoshelham ve S. O. Elberink, "Accuracy and resolution of Kinect depth data for indoor mapping applications", <i>Sensors</i>, c. 12, sy. 2, s. 1437–1454, 2012. <a href="https://doi.org/10.3390/s120201437">doi:10.3390/s120201437</a></li>
+<li id="ref-keselman2017">L. Keselman, J. Iselin Woodfill, A. Grunnet-Jepsen ve A. Bhowmik, "Intel RealSense stereoscopic depth cameras", <i>Proc. IEEE CVPR Workshops</i>, 2017. <a href="https://doi.org/10.1109/CVPRW.2017.167">doi:10.1109/CVPRW.2017.167</a></li>
+<li id="ref-newcombe2011">R. A. Newcombe vd., "KinectFusion: Real-time dense surface mapping and tracking", <i>Proc. IEEE ISMAR</i>, 2011. <a href="https://doi.org/10.1109/ISMAR.2011.6092378">doi:10.1109/ISMAR.2011.6092378</a></li>
+<li id="ref-tum2012">J. Sturm, N. Engelhard, F. Endres, W. Burgard ve D. Cremers, "A benchmark for the evaluation of RGB-D SLAM systems", <i>Proc. IEEE/RSJ IROS</i>, 2012. <a href="https://doi.org/10.1109/IROS.2012.6385773">doi:10.1109/IROS.2012.6385773</a></li>
+<li id="ref-tumformats">TUM Computer Vision Group, "RGB-D SLAM Dataset and Benchmark: File formats", <a href="https://cvg.cit.tum.de/data/datasets/rgbd-dataset/file_formats">cvg.cit.tum.de/data/datasets/rgbd-dataset/file_formats</a>, erişim 4 Kasım 2026.</li>
+<li id="ref-silberman2012">N. Silberman, D. Hoiem, P. Kohli ve R. Fergus, "Indoor segmentation and support inference from RGBD images", <i>Proc. ECCV</i>, 2012. <a href="https://doi.org/10.1007/978-3-642-33715-4_54">doi:10.1007/978-3-642-33715-4_54</a></li>
+<li id="ref-dai2017">A. Dai, A. X. Chang, M. Savva, M. Halber, T. Funkhouser ve M. Nießner, "ScanNet: Richly-annotated 3D reconstructions of indoor scenes", <i>Proc. IEEE CVPR</i>, 2017. <a href="https://doi.org/10.1109/CVPR.2017.261">doi:10.1109/CVPR.2017.261</a></li>
+<li id="ref-holz2014">D. Holz ve S. Behnke, "Approximate triangulation and region growing for efficient segmentation and smoothing of range images", <i>Robotics and Autonomous Systems</i>, c. 62, sy. 9, s. 1282–1293, 2014. <a href="https://doi.org/10.1016/j.robot.2014.03.013">doi:10.1016/j.robot.2014.03.013</a></li>
+<li id="ref-berger2017">M. Berger vd., "A survey of surface reconstruction from point clouds", <i>Computer Graphics Forum</i>, c. 36, sy. 1, s. 301–329, 2017. <a href="https://doi.org/10.1111/cgf.12802">doi:10.1111/cgf.12802</a></li>
+</ol>

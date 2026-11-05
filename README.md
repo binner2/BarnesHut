@@ -8,7 +8,10 @@
 > nokta bulutları üzerinde kernel yoğunluk kestirimi, mean-shift bölütleme ve
 > WLOP yeniden örnekleme için kullanılabiliyor. Ayrıntılar ve komutlar için
 > [`pointcloud/README.md`](pointcloud/README.md). CUDA/OpenGL görselleştirici
-> artık isteğe bağlıdır (`-DBH_ENABLE_VISUALIZATION=ON`).
+> artık isteğe bağlıdır (`-DBH_ENABLE_VISUALIZATION=ON`). Durum ve sıradaki işler:
+> [`docs/YOL_HARITASI.md`](docs/YOL_HARITASI.md); gerçek veri planı:
+> [`docs/GERCEK_VERI_PLANI.md`](docs/GERCEK_VERI_PLANI.md); rapor:
+> [`docs/derinlik_kamerasi_barnes_hut_coworks.html`](docs/derinlik_kamerasi_barnes_hut_coworks.html).
 
 ## 📋 İçindekiler
 

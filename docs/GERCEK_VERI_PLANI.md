@@ -1,16 +1,18 @@
 # Gerçek Verilerle Yapılacaklar
 
-Durum (5 Kasım 2026): Bütün ölçümler sentetik sahnede alındı. Bu belge, gerçek
+Durum (13 Kasım 2026): Bölüm 0, 1.1 (freiburg1_xyz) ve 3 uygulandı; sonuçlar
+`experiments/results/2026-11-13/`. Diğer diziler, NYU, ScanNet ve taban çizgileri bekliyor.
+İlk sürüm (5 Kasım 2026): bütün ölçümler sentetik sahnede alınmıştı. Bu belge, gerçek
 derinlik kamerası verisine geçiş için yapılacak işleri, sırasıyla ve kontrol
 listesi hâlinde verir. Her madde için "çıktı" satırı, işin bittiğini kanıtlayan
 dosyayı tanımlar.
 
 ## 0. Ön koşullar (1 gün)
 
-- [ ] `libpng-dev`, `cmake`, `g++ >= 11`; derleme: `cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j && ctest --test-dir build`
-- [ ] Python ortamı: `numpy pillow h5py open3d` (Open3D taban çizgileri için; sürümü not et)
-- [ ] Zaman ölçümü için sabit donanım: CPU modeli, çekirdek sayısı, `OMP_NUM_THREADS`, governor `performance`; her CSV'ye makine kimliği eklenir
-- [ ] Disk: TUM dizileri 0,5–2 GB/dizi, NYU v2 2,8 GB, ScanNet örnek taraması 1–3 GB
+- [x] `libpng-dev`, `cmake`, `g++ >= 11` (13 Kas 2026: GCC 13.3, libpng bulundu); derleme: `cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j && ctest --test-dir build`
+- [~] Python ortamı: `numpy 2.5.3`, `pillow 12.3.0` var; `h5py`, `open3d`, `scipy`, `matplotlib` bu ortamda yok (şekiller saf Python SVG ile)
+- [x] Zaman ölçümü: CPU modeli, çekirdek, iş parçacığı, derleyici, commit `machine.txt`'ye yazılır (`experiments/run_tum.sh`); governor bulut konteynerinde ayarlanamaz, ölçülmedi
+- [x] Disk: `freiburg1_xyz.tgz` 448 MB (sha256 `a0236d97…ef98`, `data/tum/sha256.txt`); yalnız `depth/` tutuldu (95 MB, 798 kare). NYU v2 2,8 GB, ScanNet 1–3 GB bekliyor
 
 ## 1. Veri kümeleri
 
@@ -33,10 +35,10 @@ derinlik 640×480 16-bit PNG, **ölçek 5000** (ham/5000 = metre), 0 = eksik;
 | `freiburg3_structure_notexture_far` | Düzlemsel, dokusuz; WLOP ve normal kestirimi (eksen B) |
 
 Adımlar:
-- [ ] Dizileri indir, `data/tum/<dizi>/depth/*.png` yapısını koru
-- [ ] Her kare için: `pointcloud_tool depth2cloud depth/<ts>.png --fx 525 --fy 525 --cx 319.5 --cy 239.5 --scale 5000 -o clouds/<ts>.ply` (`tools/tum_depth_to_ply.sh`)
-- [ ] fr1 ve fr2 için kalibre iç parametreler sayfada verilmiştir; "ROS varsayılanı" ile kalibre değerler arasındaki farkın KDE/WLOP sonuçlarına etkisini bir kez ölç ve rapora yaz
-- [ ] Çıktı: `experiments/results/<tarih>/tum_<dizi>_frames.csv` (kare, nokta sayısı, inşa süresi, her algoritma süresi)
+- [x] `freiburg1_xyz` indirildi (13 Kas 2026), `data/tum/rgbd_dataset_freiburg1_xyz/depth/*.png`; diğer dört dizi bekliyor
+- [x] Her kare için: `pointcloud_tool depth2cloud depth/<ts>.png --fx 525 --fy 525 --cx 319.5 --cy 239.5 --scale 5000 -o clouds/<ts>.ply` (`tools/tum_depth_to_ply.sh`)
+- [ ] (bekliyor) fr1 ve fr2 için kalibre iç parametreler sayfada verilmiştir; "ROS varsayılanı" ile kalibre değerler arasındaki farkın KDE/WLOP sonuçlarına etkisini bir kez ölç ve rapora yaz
+- [x] Çıktı: `experiments/results/2026-11-13/tum_freiburg1_xyz_frames.csv` (20 kare, stride 2, 5 tekrar medyanı), `tum_freiburg1_xyz_info*.csv`, `profiles/`
 
 ### 1.2 NYU Depth v2 (eksen C; etiketli bölütleme)
 
@@ -80,11 +82,12 @@ betiği ve biçimler orada belgelenmiştir (bu oturumda erişilmedi).
 
 ## 3. Ölçüm protokolü
 
-- Her ayar için 5 tekrar; medyan ve 5–95 persentil raporlanır (sentetik benchmark 2 tekrarın en iyisini kullanıyordu; gerçek veride medyana geç)
+- Her ayar için 5 tekrar; medyan ve 5–95 persentil raporlanır (sentetik benchmark 2 tekrarın en iyisini kullanıyordu; gerçek veride medyana geç) — **uygulandı:** `pointcloud_tool benchframe --repeats 5`, `time_s` medyan, `extra` içinde `p05`/`p95`
+- Kesin referansın (θ = 0, kesme yok) maliyeti N² olduğundan benchmark bulutları stride 2 ile alınır (~57 k nokta/kare; 20 kare × 5 tekrar ≈ 3,5 saat, 4 iş parçacığı). Stride, piksel ızgarasını koruduğu için \(1/z^2\) yoğunluk yapısı değişmez; tam çözünürlük (~230 k) istatistik ve derinlik profili için kullanılır
 - Süre, octree inşası dahil ve hariç ayrı ayrı
-- Doğruluk: KDE için kesin toplama göre göreli RMS ve en büyük hata; mean shift için etiket uyumu ve mIoU; WLOP için NN CoV, Chamfer, normal açısı hatası
-- Her CSV satırı: makine kimliği, derleyici, commit SHA, veri kümesi, kare, parametreler
-- Şekiller `experiments/plot_benchmarks.py` ile CSV'den üretilir; elle çizim yok
+- Doğruluk: KDE için kesin toplama göre göreli RMS ve en büyük hata; mean shift için etiket uyumu ve mIoU; WLOP için NN CoV, Chamfer, normal açısı hatası — **uygulandı:** RMS/max, etiket uyumu, NN CoV; mIoU (etiket yok), Chamfer ve normal açısı (yüzey referansı yok) TUM'da ölçülmedi
+- Her CSV satırı: makine kimliği, derleyici, commit SHA, veri kümesi, kare, parametreler — **uygulandı:** makine/derleyici/commit `machine.txt`'de, kare ve parametreler satırın `extra` alanında
+- Şekiller `experiments/plot_benchmarks.py` ve `experiments/plot_tum.py` ile CSV'den üretilir; elle çizim yok
 
 ## 4. Gerçek veriye geçmeden önce koddaki bilinen eksikler
 
@@ -94,7 +97,7 @@ betiği ve biçimler orada belgelenmiştir (bu oturumda erişilmedi).
 - [ ] Mean shift yineleme üst sınırı yerine adım normuna göre erken durdurma (düzlemlerde yavaş yakınsama)
 - [ ] PCD `binary_compressed` okuma (LZF) — PCL çıktılarının çoğu bu biçimdedir
 - [ ] Organize (640×480 ızgaralı) bulutu koruyan mod; piksel komşuluğundan normal kestirimi tabanı
-- [ ] `info` çıktısına yoğunluk–derinlik eğrisi (eq. \(\rho_A = f_x f_y \cos\alpha / z^2\)) doğrulaması
+- [x] `info --depth-profile`: derinlik kutusu başına NN uzaklığı medyanı ve piksel aralığı tahmini \(z\,s/f\) (eq. \(\rho_A = f_x f_y \cos\alpha / z^2\) doğrulaması); 13 Kas 2026
 
 ## 5. Teslim ölçütü
 

@@ -62,7 +62,15 @@ build/pointcloud/pointcloud_tool resample ds.ply --count 5000 --h 0.08 --theta 0
 # 4. Sentetik veri ve benchmark (gerçek kamera olmadan)
 build/pointcloud/pointcloud_tool synthetic -o synth.ply --pgm synth.pgm --labels
 build/pointcloud/pointcloud_tool bench --sizes 20000,50000,100000 --csv bench.csv
+
+# 5. Gerçek kare üzerinde ölçüm: istatistik + derinlik–NN profili, kare benchmark'ı (5 tekrar medyanı)
+build/pointcloud/pointcloud_tool info frame.ply --csv info.csv --tag 001 --depth-profile prof.csv --bin 0.25 --fx 525
+build/pointcloud/pointcloud_tool benchframe frame.ply --csv frames.csv --tag 001 --repeats 5 \
+    --hs 0.02,0.05 --thetas 0.5,0.7 --kappas 0,1 --ms-thetas 0,0.5,0.7,1.0 --wlop-thetas 0,0.5,0.7,1.0
 ```
+
+`benchframe`, `bench` ile aynı CSV şemasını kullanır ve satırları dosyaya ekler; `experiments/run_tum.sh`
+bunu bir TUM dizisinin seçilmiş kareleri için çalıştırır.
 
 Çıktı PLY dosyalarında `scalar` alanı yoğunluk ya da küme etiketini taşır ve
 renkler buna göre atanır; CloudCompare veya MeshLab ile doğrudan açılabilir.

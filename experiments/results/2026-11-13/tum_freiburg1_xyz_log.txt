@@ -637,3 +637,47 @@ Points: 52523  normals: no  colors: no  scalars: no
 Bounding box: [-2.08431  -1.1739  0.6836] .. [1.24246  0.683027  3.6782]
 Octree: nodes 11080, leaves 8623, depth 9, root width 3.32678 m, build 0.005599 s
 Nearest-neighbour distance: mean 0.005906 m, std 0.003225 m, CoV 0.5461
+frame 1305031121.746484: n=52523, octree build median 0.00272661 s (5 repeats)
+  KDE h=0.02 exact: 12.1984 s
+  KDE h=0.02 theta=0.5 kappa=0: 0.0488 s, max rel err 6.17e-02, rms 1.41e-02
+  KDE h=0.02 theta=0.5 kappa=1: 0.0804 s, max rel err 1.92e-02, rms 5.08e-03
+  KDE h=0.02 theta=0.7 kappa=0: 0.0362 s, max rel err 1.69e-01, rms 3.08e-02
+  KDE h=0.02 theta=0.7 kappa=1: 0.0884 s, max rel err 1.92e-02, rms 3.42e-03
+  KDE h=0.05 exact: 13.0087 s
+  KDE h=0.05 theta=0.5 kappa=0: 0.0691 s, max rel err 6.67e-02, rms 1.43e-02
+  KDE h=0.05 theta=0.5 kappa=1: 0.1154 s, max rel err 1.44e-02, rms 2.89e-03
+  KDE h=0.05 theta=0.7 kappa=0: 0.0403 s, max rel err 1.41e-01, rms 2.76e-02
+  KDE h=0.05 theta=0.7 kappa=1: 0.1023 s, max rel err 1.53e-02, rms 2.21e-03
+  mean shift theta=0: 35.0108 s, 19 clusters, agreement 1.000, mean iters 28.2
+  mean shift theta=0.5: 3.3273 s, 19 clusters, agreement 1.000, mean iters 28.1
+  mean shift theta=0.7: 2.4772 s, 19 clusters, agreement 0.999, mean iters 27.9
+  mean shift theta=1: 1.7277 s, 24 clusters, agreement 0.752, mean iters 27.2
+  WLOP theta=0: 0.5212 s, NN CoV 0.761 (input 0.546), M=5252
+  WLOP theta=0.5: 0.3007 s, NN CoV 0.764 (input 0.546), M=5252
+  WLOP theta=0.7: 0.2437 s, NN CoV 0.757 (input 0.546), M=5252
+  WLOP theta=1: 0.1750 s, NN CoV 0.813 (input 0.546), M=5252
+Appended to experiments/results/2026-11-13/tum_freiburg1_xyz_frames.csv
+### frame 1305031123.150840  2026-11-13T09:26:46+00:00
+Points: 234554  normals: no  colors: no  scalars: no
+Bounding box: [-1.93437  -1.36076  0.7318] .. [0.745372  0.673052  3.5286]
+Octree: nodes 46895, leaves 36712, depth 10, root width 2.7968 m, build 0.03388 s
+Nearest-neighbour distance: mean 0.002076 m, std 0.0008762 m, CoV 0.4221
+Depth profile (bin 0.25 m, f 525, stride 1):
+  z_mean  count  nn_median  pred=z*s/f  ratio
+  0.743    4077  0.00142  0.00142  1.001
+  0.865  140237  0.00164  0.00165  0.998
+  1.094   41346  0.00208  0.00208  0.997
+  1.391   31737  0.00268  0.00265  1.013
+  1.537    5572  0.00292  0.00293  0.997
+  1.963     217  0.00375  0.00374  1.002
+  2.140    2040  0.00410  0.00408  1.005
+  2.384    2680  0.00455  0.00454  1.002
+  2.612    2668  0.00496  0.00498  0.996
+  2.862    2348  0.00545  0.00545  0.999
+  3.110     577  0.00594  0.00592  1.002
+  3.331    1054  0.00634  0.00635  0.999
+  3.529       1  0.06017  0.00672  8.952
+Points: 58671  normals: no  colors: no  scalars: no
+Bounding box: [-1.92298  -1.34046  0.7318] .. [0.742666  0.670218  3.4582]
+Octree: nodes 11985, leaves 9312, depth 9, root width 2.7264 m, build 0.005898 s
+Nearest-neighbour distance: mean 0.004197 m, std 0.00189 m, CoV 0.4502

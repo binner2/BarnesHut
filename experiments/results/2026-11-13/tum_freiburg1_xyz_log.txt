@@ -769,3 +769,84 @@ Points: 56827  normals: no  colors: no  scalars: no
 Bounding box: [-2.04228  -1.32729  0.6896] .. [0.57713  0.56032  3.7174]
 Octree: nodes 11818, leaves 9202, depth 9, root width 3.0278 m, build 0.00457 s
 Nearest-neighbour distance: mean 0.005193 m, std 0.003004 m, CoV 0.5784
+frame 1305031125.955252: n=56827, octree build median 0.00284303 s (5 repeats)
+  KDE h=0.02 exact: 14.1900 s
+  KDE h=0.02 theta=0.5 kappa=0: 0.0548 s, max rel err 5.84e-02, rms 1.51e-02
+  KDE h=0.02 theta=0.5 kappa=1: 0.0892 s, max rel err 1.40e-02, rms 4.36e-03
+  KDE h=0.02 theta=0.7 kappa=0: 0.0436 s, max rel err 1.42e-01, rms 3.08e-02
+  KDE h=0.02 theta=0.7 kappa=1: 0.0878 s, max rel err 1.40e-02, rms 2.75e-03
+  KDE h=0.05 exact: 13.4264 s
+  KDE h=0.05 theta=0.5 kappa=0: 0.0769 s, max rel err 6.66e-02, rms 1.38e-02
+  KDE h=0.05 theta=0.5 kappa=1: 0.0837 s, max rel err 4.39e-02, rms 1.28e-02
+  KDE h=0.05 theta=0.7 kappa=0: 0.0474 s, max rel err 1.87e-01, rms 3.00e-02
+  KDE h=0.05 theta=0.7 kappa=1: 0.0654 s, max rel err 4.22e-02, rms 1.33e-02
+  mean shift theta=0: 50.5898 s, 19 clusters, agreement 1.000, mean iters 27.8
+  mean shift theta=0.5: 4.0563 s, 19 clusters, agreement 0.999, mean iters 27.7
+  mean shift theta=0.7: 2.7705 s, 20 clusters, agreement 0.994, mean iters 27.6
+  mean shift theta=1: 2.1629 s, 23 clusters, agreement 0.969, mean iters 27.8
+  WLOP theta=0: 0.6217 s, NN CoV 0.864 (input 0.578), M=5683
+  WLOP theta=0.5: 0.3217 s, NN CoV 0.864 (input 0.578), M=5683
+  WLOP theta=0.7: 0.2517 s, NN CoV 0.865 (input 0.578), M=5683
+  WLOP theta=1: 0.1931 s, NN CoV 0.831 (input 0.578), M=5683
+Appended to experiments/results/2026-11-13/tum_freiburg1_xyz_frames.csv
+### frame 1305031127.353407  2026-11-13T09:58:44+00:00
+Points: 232177  normals: no  colors: no  scalars: no
+Bounding box: [-1.53947  -0.667018  0.7046] .. [0.736346  0.656224  2.663]
+Octree: nodes 49246, leaves 38769, depth 9, root width 2.27582 m, build 0.02186 s
+Nearest-neighbour distance: mean 0.001858 m, std 0.000527 m, CoV 0.2836
+Depth profile (bin 0.25 m, f 525, stride 1):
+  z_mean  count  nn_median  pred=z*s/f  ratio
+  0.733   23382  0.00140  0.00140  1.002
+  0.856  136634  0.00162  0.00163  0.996
+  1.096   39426  0.00206  0.00209  0.989
+  1.375   31276  0.00263  0.00262  1.005
+  1.508      42  0.00287  0.00287  0.999
+  2.249      14  0.00428  0.00428  1.000
+  2.395     745  0.00458  0.00456  1.004
+  2.561     658  0.00488  0.00488  1.001
+Points: 58094  normals: no  colors: no  scalars: no
+Bounding box: [-1.53947  -0.667018  0.7046] .. [0.733673  0.653461  2.663]
+Octree: nodes 12320, leaves 9593, depth 8, root width 2.27314 m, build 0.006058 s
+Nearest-neighbour distance: mean 0.003735 m, std 0.001228 m, CoV 0.3289
+frame 1305031127.353407: n=58094, octree build median 0.0027987 s (5 repeats)
+  KDE h=0.02 exact: 15.4104 s
+  KDE h=0.02 theta=0.5 kappa=0: 0.0747 s, max rel err 3.91e-02, rms 1.71e-02
+  KDE h=0.02 theta=0.5 kappa=1: 0.0951 s, max rel err 3.07e-02, rms 1.50e-02
+  KDE h=0.02 theta=0.7 kappa=0: 0.0403 s, max rel err 1.22e-01, rms 3.68e-02
+  KDE h=0.02 theta=0.7 kappa=1: 0.0789 s, max rel err 3.23e-02, rms 1.49e-02
+  KDE h=0.05 exact: 12.9583 s
+  KDE h=0.05 theta=0.5 kappa=0: 0.0802 s, max rel err 6.89e-02, rms 1.49e-02
+  KDE h=0.05 theta=0.5 kappa=1: 0.1131 s, max rel err 3.29e-02, rms 8.39e-03
+  KDE h=0.05 theta=0.7 kappa=0: 0.0515 s, max rel err 1.20e-01, rms 3.05e-02
+  KDE h=0.05 theta=0.7 kappa=1: 0.0875 s, max rel err 3.29e-02, rms 6.19e-03
+  mean shift theta=0: 115.8755 s, 4 clusters, agreement 1.000, mean iters 29.8
+  mean shift theta=0.5: 5.4949 s, 4 clusters, agreement 1.000, mean iters 29.7
+  mean shift theta=0.7: 4.1108 s, 4 clusters, agreement 1.000, mean iters 29.4
+  mean shift theta=1: 3.3913 s, 6 clusters, agreement 0.929, mean iters 28.5
+  WLOP theta=0: 0.9303 s, NN CoV 0.464 (input 0.329), M=5809
+  WLOP theta=0.5: 0.3917 s, NN CoV 0.465 (input 0.329), M=5809
+  WLOP theta=0.7: 0.2926 s, NN CoV 0.468 (input 0.329), M=5809
+  WLOP theta=1: 0.2034 s, NN CoV 0.485 (input 0.329), M=5809
+Appended to experiments/results/2026-11-13/tum_freiburg1_xyz_frames.csv
+### frame 1305031128.754646  2026-11-13T10:12:11+00:00
+Points: 230416  normals: no  colors: no  scalars: no
+Bounding box: [-1.82279  -1.30825  0.6814] .. [0.713151  0.629405  3.3586]
+Octree: nodes 45868, leaves 35989, depth 10, root width 2.6772 m, build 0.02515 s
+Nearest-neighbour distance: mean 0.001835 m, std 0.0006922 m, CoV 0.3772
+Depth profile (bin 0.25 m, f 525, stride 1):
+  z_mean  count  nn_median  pred=z*s/f  ratio
+  0.721   36408  0.00138  0.00137  1.003
+  0.848  134968  0.00160  0.00162  0.992
+  1.097   35462  0.00206  0.00209  0.987
+  1.350   17455  0.00257  0.00257  0.999
+  1.514      97  0.00288  0.00288  1.000
+  2.159     728  0.00410  0.00411  0.996
+  2.386    1871  0.00455  0.00454  1.001
+  2.610    1526  0.00496  0.00497  0.997
+  2.835    1287  0.00540  0.00540  1.000
+  3.140     287  0.00610  0.00598  1.020
+  3.293     327  0.00627  0.00627  1.000
+Points: 57647  normals: no  colors: no  scalars: no
+Bounding box: [-1.81652  -1.30205  0.6814] .. [0.710563  0.629405  3.3264]
+Octree: nodes 11606, leaves 9057, depth 9, root width 2.645 m, build 0.004795 s
+Nearest-neighbour distance: mean 0.003703 m, std 0.001727 m, CoV 0.4665

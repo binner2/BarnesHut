@@ -158,7 +158,8 @@ def depth_profile(prof, out, inline, f=525.0, stride=1.0):
     ymax = max(max(r['nn_p95'] for r in pts), zmax * stride / f) * 1000 * 1.05
     def X(z): return ml + (z - zmin) / (zmax - zmin) * (W - ml - mr)
     def Y(mm): return H - mb - mm / ymax * (H - mt - mb)
-    o = head(W, H, 'TUM freiburg1_xyz: en yakın komşu uzaklığı ile derinlik, 20 karenin 25 cm derinlik kutuları, piksel aralığı tahmini z/f')
+    nfr = len(set(r['tag'] for r in prof))
+    o = head(W, H, f'TUM freiburg1_xyz: en yakın komşu uzaklığı ile derinlik, {nfr} karenin 25 cm derinlik kutuları, piksel aralığı tahmini z/f')
     if not inline: o.insert(1, STYLE)
     z = math.ceil(zmin * 2) / 2
     while z <= zmax + 1e-9:

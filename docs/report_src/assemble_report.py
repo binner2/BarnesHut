@@ -6,6 +6,10 @@ TPL = sys.argv[1]; OUT = sys.argv[2]
 HERE = os.path.dirname(os.path.abspath(__file__))
 S = sys.argv[3] if len(sys.argv) > 3 else os.path.join(HERE, '..', '..', 'experiments', 'results', '2026-11-04')
 IMG = sys.argv[4] if len(sys.argv) > 4 else os.path.join(S, 'img')
+# real-data (TUM) results dir; figures come from experiments/plot_tum.py
+T = sys.argv[5] if len(sys.argv) > 5 else os.path.join(HERE, '..', '..', 'experiments', 'results', '2026-11-13')
+sys.path.insert(0, os.path.join(HERE, '..', '..', 'experiments'))
+import plot_tum
 
 def read_csv(path):
     with open(path) as f:
@@ -210,6 +214,159 @@ def svg_scaling():
     o.append('</svg>')
     return '\n'.join(o)
 V['svg_scaling'] = svg_scaling()
+
+# ---------- real data: TUM freiburg1_xyz ----------
+import statistics, tempfile
+def med(v): return statistics.median(v) if v else float('nan')
+tum_frames_csv = glob.glob(f'{T}/tum_*_frames.csv')
+if tum_frames_csv:
+    tf = plot_tum.read_frames(tum_frames_csv[0])
+    tsel = plot_tum.sel
+    frames = plot_tum.frames_of(tf)
+    nF = len(frames)
+    info = list(csv.DictReader(open(glob.glob(f'{T}/tum_*_info.csv')[0])))
+    info2 = list(csv.DictReader(open(glob.glob(f'{T}/tum_*_info_stride*.csv')[0])))
+    for rows_ in (info, info2):
+        for r in rows_:
+            for k in r:
+                if k != 'tag': r[k] = float(r[k])
+    info = [r for r in info if r['tag'] in frames]; info2 = [r for r in info2 if r['tag'] in frames]
+    sel_txt = open(glob.glob(f'{T}/tum_*_selected_frames.txt')[0]).read().split()
+    mach = dict(l.split(': ', 1) for l in open(f'{T}/machine.txt') if ': ' in l)
+    V['tum_nframes'] = str(nF); V['tum_total_frames'] = mach.get('frames', '').split(' of ')[-1].strip()
+    V['tum_commit'] = mach.get('commit', '').strip(); V['tum_cpu'] = mach.get('cpu', '').strip(); V['tum_threads'] = mach.get('threads', '').strip()
+    V['tum_date'] = mach.get('date', '')[:10]
+    f0 = info[0]
+    V['tum_first_tag'] = f0['tag']; V['tum_first_n'] = f'{int(f0["n"]):,}'.replace(',', ' ')
+    V['tum_first_bbox'] = f'[{fmt(f0["min_x"],2)}; {fmt(f0["min_y"],2)}; {fmt(f0["min_z"],2)}] – [{fmt(f0["max_x"],2)}; {fmt(f0["max_y"],2)}; {fmt(f0["max_z"],2)}]'
+    V['tum_first_nn_mean'] = fmt(f0['nn_mean']*1000,2); V['tum_first_nn_std'] = fmt(f0['nn_std']*1000,2); V['tum_first_nn_cov'] = fmt(f0['nn_cov'],2)
+    V['tum_first_nodes'] = f'{int(f0["nodes"]):,}'.replace(',', ' '); V['tum_first_leaves'] = f'{int(f0["leaves"]):,}'.replace(',', ' ')
+    V['tum_first_depth'] = str(int(f0['depth'])); V['tum_first_build_ms'] = fmt(f0['build_s']*1000,0); V['tum_first_root'] = fmt(f0['root_width'],2)
+    V['tum_first_nn_max'] = fmt(f0['nn_max']*1000,1)
+    f0s = info2[0]
+    V['tum_first_n_s2'] = f'{int(f0s["n"]):,}'.replace(',', ' '); V['tum_first_nn_mean_s2'] = fmt(f0s['nn_mean']*1000,2); V['tum_first_nn_cov_s2'] = fmt(f0s['nn_cov'],2)
+    ns = [r['n'] for r in info]; ns2 = [r['n'] for r in info2]
+    V['tum_n_full_min'] = f'{int(min(ns)):,}'.replace(',', ' '); V['tum_n_full_max'] = f'{int(max(ns)):,}'.replace(',', ' '); V['tum_n_full_med'] = f'{int(med(ns)):,}'.replace(',', ' ')
+    V['tum_n_s2_min'] = f'{int(min(ns2)):,}'.replace(',', ' '); V['tum_n_s2_max'] = f'{int(max(ns2)):,}'.replace(',', ' '); V['tum_n_s2_med'] = f'{int(med(ns2)):,}'.replace(',', ' ')
+    V['tum_zmin'] = fmt(min(r['min_z'] for r in info),2); V['tum_zmax'] = fmt(max(r['max_z'] for r in info),2)
+    V['tum_nn_mean_full_med'] = fmt(med([r['nn_mean'] for r in info])*1000,2); V['tum_nn_cov_full_med'] = fmt(med([r['nn_cov'] for r in info]),2)
+    V['tum_nn_mean_s2_med'] = fmt(med([r['nn_mean'] for r in info2])*1000,2); V['tum_nn_cov_s2_med'] = fmt(med([r['nn_cov'] for r in info2]),2)
+    V['tum_build_full_med_ms'] = fmt(med([r['build_s'] for r in info])*1000,0); V['tum_build_full_max_ms'] = fmt(max(r['build_s'] for r in info)*1000,0)
+    V['tum_build_s2_med_ms'] = fmt(med([r['time_s'] for r in tsel(tf, algorithm='octree')])*1000,1)
+    V['tum_leaf'] = str(int(tsel(tf, algorithm='octree')[0]['leaf']))
+
+    def table_tum_frames():
+        rows = []
+        def line(name, vals, d=0, scale=1.0, unit=''):
+            v = [x*scale for x in vals]
+            return f"<tr><td>{name}</td><td class='num'>{fmt(med(v),d)}{unit}</td><td class='num'>{fmt(min(v),d)}{unit}</td><td class='num'>{fmt(max(v),d)}{unit}</td></tr>"
+        rows.append(line('Nokta sayısı, tam çözünürlük', ns))
+        rows.append(line('Nokta sayısı, stride 2 (benchmark)', ns2))
+        rows.append(line('En küçük derinlik [m]', [r['min_z'] for r in info], 2))
+        rows.append(line('En büyük derinlik [m]', [r['max_z'] for r in info], 2))
+        rows.append(line('NN uzaklığı ortalaması, tam [mm]', [r['nn_mean'] for r in info], 2, 1000))
+        rows.append(line('NN uzaklığı CoV, tam', [r['nn_cov'] for r in info], 2))
+        rows.append(line('NN uzaklığı ortalaması, stride 2 [mm]', [r['nn_mean'] for r in info2], 2, 1000))
+        rows.append(line('Octree düğüm sayısı, tam', [r['nodes'] for r in info]))
+        rows.append(line('Octree derinliği, tam', [r['depth'] for r in info]))
+        rows.append(line('Octree inşası, tam [ms]', [r['build_s'] for r in info], 1, 1000))
+        rows.append(line('Octree inşası, stride 2 [ms] (5 tekrar medyanı)', [r['time_s'] for r in tsel(tf, algorithm='octree')], 1, 1000))
+        return '\n'.join(rows)
+    V['table_tum_frames'] = table_tum_frames()
+
+    # KDE
+    hs = sorted({r['ex']['h'] for r in tsel(tf, algorithm='kde')})
+    kde_rows = []
+    for h in hs:
+        htag = f'h{int(round(h*100)):02d}'
+        ex_t = {f: tsel(tf, algorithm='kde_exact', ex_h=h, frame=f)[0]['time_s'] for f in frames if tsel(tf, algorithm='kde_exact', ex_h=h, frame=f)}
+        V[f'tum_kde_exact_{htag}'] = fmt(med(list(ex_t.values())),1)
+        V[f'tum_kde_exact_{htag}_perq'] = fmt(tsel(tf, algorithm='kde_exact', ex_h=h)[0]['near_evals']/tsel(tf, algorithm='kde_exact', ex_h=h)[0]['n'],0)
+        kde_rows.append(f"<tr><td class='num'>{fmt(100*h,0)}</td><td class='num'>0 (kesin)</td><td class='num'>—</td><td class='num'>{fmt(med(list(ex_t.values())),2)}</td><td class='num'>1×</td><td class='num'>{V[f'tum_kde_exact_{htag}_perq']}</td><td class='num'>0</td><td class='num'>0</td><td class='num'>0</td></tr>")
+        per = {}
+        for th in (0.5, 0.7):
+            for ka in (0.0, 1.0):
+                tag = f'{htag}_t{int(th*10):02d}_k{int(ka*10):02d}'
+                rs = {f: tsel(tf, algorithm='kde', theta=th, kappa=ka, ex_h=h, frame=f)[0] for f in frames if tsel(tf, algorithm='kde', theta=th, kappa=ka, ex_h=h, frame=f)}
+                per[(th,ka)] = rs
+                t = [r['time_s'] for r in rs.values()]; rms = [r['rms_rel_err'] for r in rs.values()]; mx = [r['max_rel_err'] for r in rs.values()]
+                sp = [ex_t[f]/rs[f]['time_s'] for f in rs if f in ex_t]
+                pq = [(r['far_evals']+r['near_evals'])/r['n'] for r in rs.values()]
+                V[f'tum_kde_time_{tag}'] = fmt(med(t),3); V[f'tum_kde_speedup_{tag}'] = fmt(med(sp),0)
+                V[f'tum_kde_rms_{tag}'] = pct(med(rms),2); V[f'tum_kde_rms_max_{tag}'] = pct(max(rms),2); V[f'tum_kde_rms_min_{tag}'] = pct(min(rms),2)
+                V[f'tum_kde_max_{tag}'] = pct(med(mx),1); V[f'tum_kde_maxmax_{tag}'] = pct(max(mx),1)
+                V[f'tum_kde_perq_{tag}'] = fmt(med(pq),0)
+                kde_rows.append(f"<tr><td class='num'>{fmt(100*h,0)}</td><td class='num'>{fmt(th,1)}</td><td class='num'>{'—' if ka==0 else fmt(ka,0)}</td><td class='num'>{fmt(med(t),3)}</td><td class='num'>{fmt(med(sp),0)}×</td><td class='num'>{fmt(med(pq),0)}</td><td class='num'>{pct(med(rms),2)}</td><td class='num'>{pct(min(rms),2)} – {pct(max(rms),2)}</td><td class='num'>{pct(med(mx),1)}</td></tr>")
+        for th in (0.5, 0.7):
+            a, b = per[(th,0.0)], per[(th,1.0)]
+            ratio = [a[f]['rms_rel_err']/b[f]['rms_rel_err'] for f in a if f in b]
+            mratio = [a[f]['max_rel_err']/b[f]['max_rel_err'] for f in a if f in b]
+            tratio = [b[f]['time_s']/a[f]['time_s'] for f in a if f in b]
+            tg = f'{htag}_t{int(th*10):02d}'
+            V[f'tum_kappa_rms_gain_{tg}'] = fmt(med(ratio),1); V[f'tum_kappa_rms_gain_min_{tg}'] = fmt(min(ratio),1); V[f'tum_kappa_rms_gain_max_{tg}'] = fmt(max(ratio),1)
+            V[f'tum_kappa_max_gain_{tg}'] = fmt(med(mratio),1)
+            V[f'tum_kappa_time_cost_{tg}'] = fmt(med(tratio),1)
+    V['table_tum_kde'] = '\n'.join(kde_rows)
+    # synthetic kappa gain for comparison (n = nmax, h = 5 cm)
+    for th in (0.5, 0.7):
+        a = sel(main, algorithm='kde', n=nmax, theta=th, kappa=0.0, cutoff_sigmas=4.0)[0]; b = sel(main, algorithm='kde', n=nmax, theta=th, kappa=1.0, cutoff_sigmas=4.0)[0]
+        V[f'syn_kappa_rms_gain_t{int(th*10):02d}'] = fmt(a['rms_rel_err']/b['rms_rel_err'],1)
+        V[f'syn_kappa_time_cost_t{int(th*10):02d}'] = fmt(b['time_s']/a['time_s'],1)
+
+    # mean shift and WLOP
+    ms_ex = {f: tsel(tf, algorithm='meanshift', theta=0.0, frame=f)[0] for f in frames if tsel(tf, algorithm='meanshift', theta=0.0, frame=f)}
+    w_ex = {f: tsel(tf, algorithm='wlop', theta=0.0, frame=f)[0] for f in frames if tsel(tf, algorithm='wlop', theta=0.0, frame=f)}
+    V['tum_ms_exact_time'] = fmt(med([r['time_s'] for r in ms_ex.values()]),1)
+    V['tum_ms_exact_clusters'] = fmt(med([r['ex']['clusters'] for r in ms_ex.values()]),0)
+    V['tum_ms_exact_clusters_min'] = str(int(min(r['ex']['clusters'] for r in ms_ex.values()))); V['tum_ms_exact_clusters_max'] = str(int(max(r['ex']['clusters'] for r in ms_ex.values())))
+    V['tum_ms_exact_iters'] = fmt(med([r['ex']['mean_iters'] for r in ms_ex.values()]),1)
+    V['tum_ms_h'] = fmt(100*tsel(tf, algorithm='meanshift')[0]['ex']['h'],0)
+    V['tum_wlop_exact_time'] = fmt(med([r['time_s'] for r in w_ex.values()]),2)
+    V['tum_wlop_m_med'] = f'{int(med([r["ex"]["m"] for r in w_ex.values()])):,}'.replace(',', ' ')
+    V['tum_wlop_cov_in'] = fmt(med([r['ex']['nn_cov_input'] for r in w_ex.values()]),3)
+    V['tum_wlop_cov_exact'] = fmt(med([r['ex']['nn_cov'] for r in w_ex.values()]),3)
+    V['tum_wlop_nn_mean_out'] = fmt(med([r['ex']['nn_mean'] for r in w_ex.values()])*1000,1)
+    rows = []
+    for th in (0.0, 0.5, 0.7, 1.0):
+        m = {f: tsel(tf, algorithm='meanshift', theta=th, frame=f)[0] for f in frames if tsel(tf, algorithm='meanshift', theta=th, frame=f)}
+        w = {f: tsel(tf, algorithm='wlop', theta=th, frame=f)[0] for f in frames if tsel(tf, algorithm='wlop', theta=th, frame=f)}
+        if not m or not w: continue
+        tag = f't{int(th*10):02d}'
+        mt = [r['time_s'] for r in m.values()]; msp = [ms_ex[f]['time_s']/m[f]['time_s'] for f in m if f in ms_ex]
+        ag = [r['ex']['agreement'] for r in m.values()]; cl = [r['ex']['clusters'] for r in m.values()]
+        wt = [r['time_s'] for r in w.values()]; wsp = [w_ex[f]['time_s']/w[f]['time_s'] for f in w if f in w_ex]; cov = [r['ex']['nn_cov'] for r in w.values()]
+        V[f'tum_ms_time_{tag}'] = fmt(med(mt),1); V[f'tum_ms_speedup_{tag}'] = fmt(med(msp),1)
+        V[f'tum_ms_agree_{tag}'] = pct(med(ag),1); V[f'tum_ms_agree_min_{tag}'] = pct(min(ag),1); V[f'tum_ms_agree_max_{tag}'] = pct(max(ag),1)
+        V[f'tum_ms_clusters_{tag}'] = fmt(med(cl),0); V[f'tum_ms_clusters_min_{tag}'] = str(int(min(cl))); V[f'tum_ms_clusters_max_{tag}'] = str(int(max(cl)))
+        V[f'tum_ms_iters_{tag}'] = fmt(med([r['ex']['mean_iters'] for r in m.values()]),1)
+        V[f'tum_wlop_time_{tag}'] = fmt(med(wt),2); V[f'tum_wlop_speedup_{tag}'] = fmt(med(wsp),1); V[f'tum_wlop_cov_{tag}'] = fmt(med(cov),3)
+        V[f'tum_wlop_cov_min_{tag}'] = fmt(min(cov),3); V[f'tum_wlop_cov_max_{tag}'] = fmt(max(cov),3)
+        agree = '100 %' if th == 0 else f"{pct(med(ag),1)} ({pct(min(ag),1)} – {pct(max(ag),1)})"
+        rows.append(f"<tr><td class='num'>{'kesin' if th==0 else fmt(th,1)}</td><td class='num'>{fmt(med(mt),1)}</td><td class='num'>{fmt(med(msp),1)}×</td><td class='num'>{fmt(med(cl),0)} ({int(min(cl))}–{int(max(cl))})</td><td class='num'>{agree}</td><td class='num'>{fmt(med(wt),2)}</td><td class='num'>{fmt(med(wsp),1)}×</td><td class='num'>{fmt(med(cov),3)}</td></tr>")
+    V['table_tum_mswlop'] = '\n'.join(rows)
+
+    # depth profile
+    prof = [r for r in plot_tum.read_profiles(T) if r['tag'] in frames]
+    good = [r for r in prof if r['count'] >= 200]
+    a = plot_tum.fit_slope(prof)
+    V['tum_prof_f_fit'] = fmt(1/a,1); V['tum_prof_f_dev'] = fmt(100*abs(1/a-525)/525,1)
+    rat = [r['ratio_median_pred'] for r in good]
+    V['tum_prof_ratio_med'] = fmt(med(rat),3); V['tum_prof_ratio_min'] = fmt(min(rat),3); V['tum_prof_ratio_max'] = fmt(max(rat),3)
+    V['tum_prof_bins'] = str(len(good)); V['tum_prof_bin_cm'] = fmt(100*(good[0]['z_hi']-good[0]['z_lo']),0)
+    V['tum_prof_zmin'] = fmt(min(r['z_lo'] for r in good),2); V['tum_prof_zmax'] = fmt(max(r['z_hi'] for r in good),2)
+    V['tum_prof_nn_min_mm'] = fmt(min(r['nn_median'] for r in good)*1000,2); V['tum_prof_nn_max_mm'] = fmt(max(r['nn_median'] for r in good)*1000,2)
+    spread = [(r['nn_p95']-r['nn_p05'])/r['nn_median'] for r in good]
+    V['tum_prof_spread_med'] = fmt(med(spread),2)
+    # density ratio between the nearest and farthest bin: (z_far/z_near)^2 vs measured (nn_far/nn_near)^2
+    near = min(good, key=lambda r: r['z_mean']); far = max(good, key=lambda r: r['z_mean'])
+    V['tum_prof_z_near'] = fmt(near['z_mean'],2); V['tum_prof_z_far'] = fmt(far['z_mean'],2)
+    V['tum_prof_density_ratio_pred'] = fmt((far['z_mean']/near['z_mean'])**2,1)
+    V['tum_prof_density_ratio_meas'] = fmt((far['nn_median']/near['nn_median'])**2,1)
+
+    # figures (inline SVG via plot_tum)
+    tmp = tempfile.mkdtemp()
+    plot_tum.kde_err(tf, f'{tmp}/kde.svg', True); plot_tum.meanshift(tf, f'{tmp}/ms.svg', True); plot_tum.depth_profile(prof, f'{tmp}/prof.svg', True)
+    V['svg_tum_kde'] = open(f'{tmp}/kde.svg').read(); V['svg_tum_ms'] = open(f'{tmp}/ms.svg').read(); V['svg_tum_prof'] = open(f'{tmp}/prof.svg').read()
 
 # images
 for name in ('scene_labels','density_full','meanshift_ds','wlop_ds','curvature','ds_1cm'):

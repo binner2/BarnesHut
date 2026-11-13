@@ -1,0 +1,11 @@
+date: 2026-11-13T04:32:47+00:00
+commit: 231180d
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+cores: 4
+threads: 4
+compiler: g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0
+flags: -O3 -march=native (CMake Release)
+sequence: freiburg1_xyz
+frames: 20 equally spaced of 798
+benchmark stride: 2  repeats: 5
+intrinsics: fx=fy=525 cx=319.5 cy=239.5 scale=5000 (ROS default, TUM file_formats page)

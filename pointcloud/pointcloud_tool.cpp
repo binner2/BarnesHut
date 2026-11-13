@@ -11,7 +11,11 @@
 #include "point_octree.h"
 #include "synthetic.h"
 
+#include <algorithm>
 #include <cctype>
+#include <cmath>
+#include <numeric>
+#include <random>
 #include <cstdlib>
 #include <fstream>
 #include <iomanip>
@@ -76,7 +80,9 @@ Args parse(int argc, char** argv) {
 void usage() {
     std::cout <<
         "pointcloud_tool - Barnes-Hut accelerated depth-camera point-cloud pipeline\n\n"
-        "  info        <cloud>                               statistics, octree summary\n"
+        "  info        <cloud> [--csv stats.csv --tag name] [--depth-profile prof.csv --bin 0.1 --stride 1]\n"
+        "                                                     statistics, octree summary; optional CSV rows and\n"
+        "                                                     NN-distance vs depth profile (rho_A = fx fy cos a / z^2 check)\n"
         "  synthetic   -o out.ply [--pgm depth.pgm] [--noise c] [--labels]\n"
         "                                                     render a synthetic depth frame (640x480)\n"
         "  depth2cloud <depth.png|.pgm|.raw> -o out.ply [--intrinsics file | --fx --fy --cx --cy]\n"
@@ -87,7 +93,12 @@ void usage() {
         "  density     <cloud> --h 0.02 [--theta 0.5] [--kappa 0] [--cutoff 4] [--compare] -o out.ply\n"
         "  meanshift   <cloud> --h 0.05 [--theta 0.5] [--kappa 0] [--min-size 50] -o out.ply\n"
         "  resample    <cloud> --count 5000 --h 0.05 [--mu 0.45] [--iters 20] [--theta 0.5] [--kappa 0] -o out.ply\n"
-        "  bench       [--sizes 20000,50000,100000] [--thetas 0,0.3,0.5,0.7,1.0] [--kappas 0,1,0.5] [--h 0.03] --csv out.csv\n\n"
+        "  bench       [--sizes 20000,50000,100000] [--thetas 0,0.3,0.5,0.7,1.0] [--kappas 0,1,0.5] [--h 0.03] --csv out.csv\n"
+        "  benchframe  <cloud> --csv out.csv [--tag frame] [--repeats 5] [--hs 0.02,0.05] [--thetas 0.5,0.7] [--kappas 0,1]\n"
+        "              [--cutoff 4] [--ms-h 0.08] [--ms-thetas 0,0.5,0.7,1.0] [--ms-iters 30] [--wlop-h 0.08]\n"
+        "              [--wlop-thetas 0,0.5,0.7,1.0] [--wlop-iters 10] [--wlop-frac 0.1]\n"
+        "                                                     per-frame real-data benchmark: medians of --repeats runs,\n"
+        "                                                     rows appended to the CSV (same schema as bench)\n\n"
         "Common: --leaf N (octree leaf capacity, default 16), --threads T\n"
         "theta: Barnes-Hut opening angle (0 = exact). kappa: kernel-aware limit, approximate only cells\n"
         "narrower than kappa*h (0 = geometric criterion only).\n";
@@ -137,6 +148,31 @@ void print_counters(const char* what, const BhCounters& c, Index n) {
 
 // ---------------------------------------------------------------------------
 
+// Append a CSV row; write the header first when the file is new or empty.
+void csv_append(const std::string& path, const std::string& header, const std::string& row) {
+    bool need_header = true;
+    {
+        std::ifstream in(path, std::ios::binary | std::ios::ate);
+        if (in && in.tellg() > 0) need_header = false;
+    }
+    std::ofstream out(path, std::ios::app);
+    if (need_header) out << header << "\n";
+    out << row << "\n";
+}
+
+template <class T>
+T percentile(std::vector<T> v, double p) {
+    if (v.empty()) return T{};
+    std::sort(v.begin(), v.end());
+    const double pos = p * static_cast<double>(v.size() - 1);
+    const std::size_t lo = static_cast<std::size_t>(std::floor(pos));
+    const std::size_t hi = std::min(lo + 1, v.size() - 1);
+    const double f = pos - static_cast<double>(lo);
+    return static_cast<T>(v[lo] + (v[hi] - v[lo]) * f);
+}
+template <class T>
+T median(const std::vector<T>& v) { return percentile(v, 0.5); }
+
 int cmd_info(const Args& a) {
     auto cloud = load_or_fail(a);
     if (!cloud) return 2;
@@ -152,6 +188,56 @@ int cmd_info(const Args& a) {
     const auto nn = nearest_neighbor_statistics(*cloud);
     std::cout << "Nearest-neighbour distance: mean " << nn.mean << " m, std " << nn.stddev << " m, CoV "
               << nn.coefficient_of_variation() << "\n";
+    if (a.has("csv")) {
+        std::ostringstream row;
+        row << std::setprecision(9) << a.get("tag", a.positional.front()) << "," << cloud->size() << "," << lo.x() << "," << lo.y() << "," << lo.z()
+            << "," << hi.x() << "," << hi.y() << "," << hi.z() << "," << s.node_count << "," << s.leaf_count << "," << s.depth << ","
+            << s.root_width << "," << s.build_seconds << "," << nn.mean << "," << nn.stddev << "," << nn.coefficient_of_variation()
+            << "," << nn.min << "," << nn.max;
+        csv_append(a.get("csv"),
+                   "tag,n,min_x,min_y,min_z,max_x,max_y,max_z,nodes,leaves,depth,root_width,build_s,nn_mean,nn_std,nn_cov,nn_min,nn_max",
+                   row.str());
+    }
+    // Depth profile: nearest-neighbour spacing per depth bin against the pinhole prediction z * stride / f.
+    // For a surface sampled on the pixel grid, rho_A = fx fy cos(alpha) / z^2 points per m^2, and the spacing
+    // of adjacent samples along the less foreshortened image axis is z * stride / f.
+    if (a.has("depth-profile")) {
+        const Index n = cloud->size();
+        const Real bin = a.num("bin", 0.1);
+        const Real f = a.num("fx", 525.0);
+        const Real stride = a.num("stride", 1.0);
+        std::vector<Real> d(n, 0.0);
+#pragma omp parallel
+        {
+            std::vector<std::pair<Real, Index>> knn;
+#pragma omp for schedule(dynamic, 256)
+            for (std::ptrdiff_t ii = 0; ii < static_cast<std::ptrdiff_t>(n); ++ii) {
+                tree.knn_search(cloud->points[static_cast<Index>(ii)], 2, knn);
+                d[static_cast<Index>(ii)] = knn.size() > 1 ? std::sqrt(knn[1].first) : 0.0;
+            }
+        }
+        std::map<long, std::vector<Real>> bins;
+        std::map<long, Real> zsum;
+        for (Index i = 0; i < n; ++i) {
+            const long b = static_cast<long>(std::floor(cloud->points[i].z() / bin));
+            bins[b].push_back(d[i]);
+            zsum[b] += cloud->points[i].z();
+        }
+        std::ofstream out(a.get("depth-profile"));
+        out << "tag,z_lo,z_hi,z_mean,count,nn_mean,nn_median,nn_p05,nn_p95,pred_spacing,ratio_median_pred\n";
+        std::cout << "Depth profile (bin " << bin << " m, f " << f << ", stride " << stride << "):\n  z_mean  count  nn_median  pred=z*s/f  ratio\n";
+        for (auto& [b, v] : bins) {
+            const Real zm = zsum[b] / static_cast<Real>(v.size());
+            const Real pred = zm * stride / f;
+            const Real med = median(v);
+            const Real mean = std::accumulate(v.begin(), v.end(), 0.0) / static_cast<Real>(v.size());
+            out << std::setprecision(9) << a.get("tag", a.positional.front()) << "," << b * bin << "," << (b + 1) * bin << "," << zm << ","
+                << v.size() << "," << mean << "," << med << "," << percentile(v, 0.05) << "," << percentile(v, 0.95) << "," << pred << ","
+                << med / pred << "\n";
+            std::cout << std::fixed << std::setprecision(3) << "  " << zm << "  " << std::setw(6) << v.size() << "  " << std::setprecision(5)
+                      << med << "  " << pred << "  " << std::setprecision(3) << med / pred << std::defaultfloat << "\n";
+        }
+    }
     return 0;
 }
 
@@ -463,6 +549,181 @@ int cmd_bench(const Args& a) {
     return 0;
 }
 
+// Per-frame benchmark on a real cloud: every configuration is run --repeats times and
+// the median wall time is reported (p05/p95 in `extra`). Same CSV schema as `bench`.
+int cmd_benchframe(const Args& a) {
+    auto cloud_opt = load_or_fail(a);
+    if (!cloud_opt) return 2;
+    PointCloud& cloud = *cloud_opt;
+    if (!a.has("csv")) {
+        std::cerr << "Error: --csv <output> missing\n";
+        return 2;
+    }
+    auto split = [](const std::string& s) {
+        std::vector<double> v;
+        std::string t = s;
+        for (auto& c : t) if (c == ',') c = ' ';
+        std::istringstream is(t);
+        double x;
+        while (is >> x) v.push_back(x);
+        return v;
+    };
+    const std::string csv_path = a.get("csv");
+    const std::string header =
+        "algorithm,n,theta,kappa,cutoff_sigmas,leaf,threads,build_s,time_s,far_evals,near_evals,max_rel_err,mean_rel_err,rms_rel_err,extra";
+    const std::string tag = a.get("tag", a.positional.front());
+    const int repeats = std::max(1, static_cast<int>(a.integer("repeats", 5)));
+    const auto hs = split(a.get("hs", "0.02,0.05"));
+    const auto thetas = split(a.get("thetas", "0.5,0.7"));
+    const auto kappas = split(a.get("kappas", "0,1"));
+    const Real cutoff = a.num("cutoff", 4.0);
+    const auto ms_thetas = split(a.get("ms-thetas", "0,0.5,0.7,1.0"));
+    const auto wlop_thetas = split(a.get("wlop-thetas", "0,0.5,0.7,1.0"));
+    const long leaf = a.integer("leaf", 16);
+    const Index n = cloud.size();
+    const int threads = [] {
+#ifdef _OPENMP
+        return omp_get_max_threads();
+#else
+        return 1;
+#endif
+    }();
+
+    // Octree build, repeated.
+    std::vector<double> build_times;
+    PointOctree tree;
+    for (int r = 0; r < repeats; ++r) {
+        tree.build(cloud.points, tree_params(a));
+        build_times.push_back(tree.statistics().build_seconds);
+    }
+    const double build_s = median(build_times);
+    auto base = [&](const std::string& alg, double theta, double kappa, double co) {
+        std::ostringstream o;
+        o << std::setprecision(9) << alg << "," << n << "," << theta << "," << kappa << "," << co << "," << leaf << "," << threads << "," << build_s;
+        return o.str();
+    };
+    auto stats_extra = [&](const std::vector<double>& t) {
+        std::ostringstream o;
+        o << std::setprecision(9) << "frame=" << tag << ";repeats=" << repeats << ";p05=" << percentile(t, 0.05) << ";p95=" << percentile(t, 0.95);
+        return o.str();
+    };
+    std::cout << "frame " << tag << ": n=" << n << ", octree build median " << build_s << " s (" << repeats << " repeats)\n";
+    csv_append(csv_path, header, base("octree", 0, 0, 0) + "," + std::to_string(build_s) + ",0,0,0,0,0," + stats_extra(build_times) +
+                                    ";nodes=" + std::to_string(tree.statistics().node_count) + ";depth=" + std::to_string(tree.statistics().depth));
+
+    // KDE: exact reference (theta 0, no cutoff) and BH variants, per bandwidth.
+    for (const double h : hs) {
+        KernelDensityOptions ex;
+        ex.bandwidth = h;
+        ex.theta = 0.0;
+        ex.cutoff_sigmas = 0.0;
+        std::vector<double> t;
+        KernelDensityResult exact;
+        for (int r = 0; r < repeats; ++r) {
+            exact = kernel_density(cloud, tree, ex);
+            t.push_back(exact.counters.seconds);
+        }
+        std::cout << "  KDE h=" << h << " exact: " << std::fixed << std::setprecision(4) << median(t) << " s" << std::defaultfloat << "\n";
+        {
+            std::ostringstream o;
+            o << std::setprecision(9) << base("kde_exact", 0, 0, 0) << "," << median(t) << "," << exact.counters.far_evaluations << ","
+              << exact.counters.near_evaluations << ",0,0,0," << stats_extra(t) << ";h=" << h;
+            csv_append(csv_path, header, o.str());
+        }
+        for (const double theta : thetas) {
+            for (const double kappa : kappas) {
+                KernelDensityOptions ko;
+                ko.bandwidth = h;
+                ko.theta = theta;
+                ko.kappa = kappa;
+                ko.cutoff_sigmas = cutoff;
+                std::vector<double> tt;
+                KernelDensityResult res;
+                for (int r = 0; r < repeats; ++r) {
+                    res = kernel_density(cloud, tree, ko);
+                    tt.push_back(res.counters.seconds);
+                }
+                const auto err = relative_error(res.density, exact.density);
+                std::cout << "  KDE h=" << h << " theta=" << theta << " kappa=" << kappa << ": " << std::fixed << std::setprecision(4) << median(tt)
+                          << " s, max rel err " << std::scientific << std::setprecision(2) << err.max_relative << ", rms " << err.rms_relative
+                          << std::defaultfloat << "\n";
+                std::ostringstream o;
+                o << std::setprecision(9) << base("kde", theta, kappa, cutoff) << "," << median(tt) << "," << res.counters.far_evaluations << ","
+                  << res.counters.near_evaluations << "," << err.max_relative << "," << err.mean_relative << "," << err.rms_relative << ","
+                  << stats_extra(tt) << ";h=" << h;
+                csv_append(csv_path, header, o.str());
+            }
+        }
+    }
+
+    // Mean shift: theta list (0 = exact reference with cutoff), label agreement by majority mapping.
+    MeanShiftOptions mo;
+    mo.bandwidth = a.num("ms-h", 0.08);
+    mo.cutoff_sigmas = cutoff;
+    mo.min_cluster_size = static_cast<Index>(a.integer("min-size", 50));
+    mo.max_iterations = static_cast<int>(a.integer("ms-iters", 30));
+    std::optional<MeanShiftResult> ms_ref;
+    for (const double theta : ms_thetas) {
+        mo.theta = theta;
+        std::vector<double> tt;
+        MeanShiftResult ms;
+        for (int r = 0; r < repeats; ++r) {
+            ms = mean_shift(cloud, tree, mo);
+            tt.push_back(ms.counters.seconds);
+        }
+        double agreement = 1.0;
+        if (!ms_ref) {
+            if (theta != 0.0) std::cerr << "Warning: first mean-shift theta is not 0; agreement is measured against it anyway\n";
+            ms_ref = ms;
+        } else {
+            std::map<std::pair<int, int>, Index> confusion;
+            for (Index i = 0; i < n; ++i) ++confusion[{ms_ref->labels[i], ms.labels[i]}];
+            std::map<int, std::pair<int, Index>> best_match;
+            for (const auto& [key, cnt] : confusion)
+                if (cnt > best_match[key.first].second) best_match[key.first] = {key.second, cnt};
+            Index agree = 0;
+            for (const auto& [l, m] : best_match) agree += m.second;
+            agreement = static_cast<double>(agree) / static_cast<double>(n);
+        }
+        const double mean_iters = static_cast<double>(ms.total_iterations) / static_cast<double>(n);
+        std::cout << "  mean shift theta=" << theta << ": " << std::fixed << std::setprecision(4) << median(tt) << " s, " << ms.modes.size()
+                  << " clusters, agreement " << std::setprecision(3) << agreement << ", mean iters " << std::setprecision(1) << mean_iters
+                  << std::defaultfloat << "\n";
+        std::ostringstream o;
+        o << std::setprecision(9) << base("meanshift", theta, 0, cutoff) << "," << median(tt) << "," << ms.counters.far_evaluations << ","
+          << ms.counters.near_evaluations << ",0,0,0," << stats_extra(tt) << ";h=" << mo.bandwidth << ";clusters=" << ms.modes.size()
+          << ";agreement=" << agreement << ";mean_iters=" << mean_iters;
+        csv_append(csv_path, header, o.str());
+    }
+
+    // WLOP: M = frac * N samples, theta list, NN CoV of the output.
+    WlopOptions wo;
+    wo.target_count = std::max<Index>(100, static_cast<Index>(std::lround(a.num("wlop-frac", 0.1) * static_cast<double>(n))));
+    wo.support_radius = a.num("wlop-h", 0.08);
+    wo.iterations = static_cast<int>(a.integer("wlop-iters", 10));
+    const auto nn_in = nearest_neighbor_statistics(cloud);
+    for (const double theta : wlop_thetas) {
+        wo.theta = theta;
+        std::vector<double> tt;
+        WlopResult w;
+        for (int r = 0; r < repeats; ++r) {
+            w = wlop_resample(cloud, wo);
+            tt.push_back(w.counters.seconds);
+        }
+        const auto nn = nearest_neighbor_statistics(w.cloud);
+        std::cout << "  WLOP theta=" << theta << ": " << std::fixed << std::setprecision(4) << median(tt) << " s, NN CoV " << std::setprecision(3)
+                  << nn.coefficient_of_variation() << " (input " << nn_in.coefficient_of_variation() << "), M=" << w.cloud.size()
+                  << std::defaultfloat << "\n";
+        std::ostringstream o;
+        o << std::setprecision(9) << base("wlop", theta, 0, 1) << "," << median(tt) << "," << w.counters.far_evaluations << ","
+          << w.counters.near_evaluations << ",0,0,0," << stats_extra(tt) << ";h=" << wo.support_radius << ";nn_cov=" << nn.coefficient_of_variation()
+          << ";nn_cov_input=" << nn_in.coefficient_of_variation() << ";m=" << w.cloud.size() << ";nn_mean=" << nn.mean;
+        csv_append(csv_path, header, o.str());
+    }
+    std::cout << "Appended to " << csv_path << "\n";
+    return 0;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -484,6 +745,7 @@ int main(int argc, char** argv) {
     if (a.command == "meanshift") return cmd_meanshift(a);
     if (a.command == "resample") return cmd_resample(a);
     if (a.command == "bench") return cmd_bench(a);
+    if (a.command == "benchframe") return cmd_benchframe(a);
     std::cerr << "Unknown command: " << a.command << "\n";
     usage();
     return 1;

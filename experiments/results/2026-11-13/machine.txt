@@ -9,3 +9,4 @@ sequence: freiburg1_xyz
 frames: 20 equally spaced of 798
 benchmark stride: 2  repeats: 5
 intrinsics: fx=fy=525 cx=319.5 cy=239.5 scale=5000 (ROS default, TUM file_formats page)
+resumed: 2026-11-13T09:21:12+00:00 commit 2bbac8f (frames 15-20 after worker restart; frame 1305031121.746484 remeasured from scratch)
